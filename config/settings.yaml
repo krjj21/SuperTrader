@@ -1,0 +1,132 @@
+# ================================================
+# SuperTrader 설정
+# Factor Stock Selection + ML Timing
+# ================================================
+
+kis:
+  base_url: https://openapivts.koreainvestment.com:29443  # 모의투자
+  is_virtual: true
+  token_refresh_hours: 20
+
+# ── 유니버스 설정 ──
+universe:
+  market: "KOSPI"                 # KOSPI, KOSDAQ, ALL
+  min_market_cap: 100_000_000_000  # 최소 시가총액 1000억
+  min_avg_volume: 100_000        # 최소 20일 평균 거래량
+  exclude_sectors: []             # 제외 섹터
+
+# ── 팩터 설정 ──
+factors:
+  rebalance_freq: "monthly"       # monthly, quarterly
+  top_n: 30                       # 종목풀 크기
+  composite_method: "ic_weighted" # equal, ic_weighted
+  ic_lookback: 12                 # IC 계산 lookback (개월)
+  min_ir: 0.3                     # 최소 IR 임계값
+  neutralize_industry: true
+  neutralize_market_cap: true
+
+# ── 타이밍 모델 설정 ──
+timing:
+  model: "xgboost"                # none, macd, kdj, decision_tree, xgboost, lightgbm, lstm, transformer
+  forward_days: 5                 # 라벨 생성용 미래 수익률 기간
+  buy_threshold: 0.02             # +2% 이상이면 매수 라벨
+  sell_threshold: -0.02           # -2% 이하면 매도 라벨
+
+  # MACD 파라미터
+  macd:
+    fast: 12
+    slow: 26
+    signal: 9
+
+  # KDJ 파라미터
+  kdj:
+    n: 9
+    m1: 3
+    m2: 3
+
+  # Decision Tree
+  decision_tree:
+    max_depth: 8
+    min_samples_leaf: 20
+
+  # XGBoost / LightGBM
+  gradient_boost:
+    n_estimators: 500
+    max_depth: 6
+    learning_rate: 0.05
+    subsample: 0.8
+    colsample_bytree: 0.8
+
+  # LSTM
+  lstm:
+    sequence_length: 20
+    hidden_size: 64
+    num_layers: 2
+    dropout: 0.2
+    learning_rate: 0.001
+    epochs: 100
+    batch_size: 64
+
+  # Transformer
+  transformer:
+    sequence_length: 30
+    d_model: 128
+    nhead: 4
+    num_layers: 2
+    dropout: 0.1
+    learning_rate: 0.0005
+    epochs: 100
+    batch_size: 64
+
+# ── 전략 파라미터 ──
+strategy:
+  name: "factor_xgb"
+  params:
+    rsi_period: 14
+    macd_fast: 12
+    macd_slow: 26
+    macd_signal: 9
+    bb_period: 20
+    bb_std: 2.0
+    atr_period: 14
+    atr_multiplier: 2.0
+
+# ── 리스크 관리 ──
+risk:
+  max_position_pct: 0.05          # 종목당 최대 5%
+  max_total_positions: 30         # 최대 30종목
+  daily_loss_limit_pct: 0.03      # 일일 손실 한도 3%
+  stop_loss_pct: 0.07             # 개별 손절 7%
+  max_order_retries: 3
+
+# ── 스케줄 ──
+schedule:
+  pre_market: "08:30"
+  market_open: "09:00"
+  market_close: "15:30"
+  post_market: "15:40"
+  check_interval_sec: 300          # 5분 간격
+  rebalance_day: 1                 # 매월 첫 거래일
+
+# ── 백테스트 ──
+backtest:
+  start_date: "2018-01-01"
+  end_date: "2024-12-31"
+  initial_capital: 100_000_000     # 1억
+  commission_rate: 0.00015         # 0.015%
+  tax_rate: 0.0023                 # 매도세 0.23%
+
+# ── 데이터베이스 ──
+database:
+  path: "data/trading.db"
+
+# ── 로깅 ──
+logging:
+  level: "INFO"
+  file: "logs/supertrader.log"
+  rotation: "10 MB"
+  retention: "30 days"
+
+notification:
+  slack:
+    enabled: true

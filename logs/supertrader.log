@@ -1,0 +1,682 @@
+2026-04-05 21:54:22.710 | INFO     | __main__:run_backtest:39 - ============================================================
+2026-04-05 21:54:22.711 | INFO     | __main__:run_backtest:40 - SuperTrader 백테스트 시작
+2026-04-05 21:54:22.711 | INFO     | __main__:run_backtest:41 - ============================================================
+2026-04-05 21:54:50.179 | INFO     | __main__:run_backtest:39 - ============================================================
+2026-04-05 21:54:50.179 | INFO     | __main__:run_backtest:40 - SuperTrader 백테스트 시작
+2026-04-05 21:54:50.180 | INFO     | __main__:run_backtest:41 - ============================================================
+2026-04-05 21:55:54.326 | INFO     | __main__:run_backtest:39 - ============================================================
+2026-04-05 21:55:54.326 | INFO     | __main__:run_backtest:40 - SuperTrader 백테스트 시작
+2026-04-05 21:55:54.327 | INFO     | __main__:run_backtest:41 - ============================================================
+2026-04-05 21:56:57.756 | INFO     | __main__:run_backtest:39 - ============================================================
+2026-04-05 21:56:57.757 | INFO     | __main__:run_backtest:40 - SuperTrader 백테스트 시작
+2026-04-05 21:56:57.758 | INFO     | __main__:run_backtest:41 - ============================================================
+2026-04-05 21:57:00.911 | INFO     | __main__:run_backtest:52 - Step 1: 유니버스 구성
+2026-04-05 21:57:01.001 | WARNING  | src.data.market_data:get_universe:42 - 유니버스가 비어 있습니다: date=20241231
+2026-04-05 21:57:01.002 | ERROR    | __main__:run_backtest:55 - 유니버스가 비어 있습니다
+2026-04-05 22:01:16.022 | INFO     | __main__:run_backtest:39 - ============================================================
+2026-04-05 22:01:16.043 | INFO     | __main__:run_backtest:40 - SuperTrader 백테스트 시작
+2026-04-05 22:01:16.044 | INFO     | __main__:run_backtest:41 - ============================================================
+2026-04-05 22:01:18.443 | INFO     | __main__:run_backtest:52 - Step 1: 유니버스 구성
+2026-04-05 22:01:18.755 | INFO     | src.data.market_data:get_universe:65 - 유니버스 구성: 311종목 (KOSPI)
+2026-04-05 22:01:18.756 | INFO     | __main__:run_backtest:58 - 유니버스: 311종목
+2026-04-05 22:01:18.756 | INFO     | __main__:run_backtest:61 - Step 2: OHLCV 데이터 로드
+2026-04-05 22:01:49.255 | INFO     | src.data.market_data:get_ohlcv_batch:158 - OHLCV 로드 진행: 50/50 (50종목 성공)
+2026-04-05 22:01:49.256 | INFO     | src.data.market_data:get_ohlcv_batch:160 - OHLCV 배치 로드 완료: 50/50종목
+2026-04-05 22:01:49.256 | INFO     | __main__:run_backtest:64 - OHLCV 로드: 50종목
+2026-04-05 22:01:49.256 | INFO     | __main__:run_backtest:67 - Step 3: 리밸런싱 스케줄 생성
+2026-04-05 22:01:49.257 | INFO     | __main__:run_backtest:69 - 리밸런싱 날짜: 84회
+2026-04-05 22:01:49.257 | INFO     | __main__:run_backtest:72 - Step 4: 종목풀 히스토리 구축
+2026-04-05 22:01:49.294 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-01-01: 30종목 선정
+2026-04-05 22:01:49.318 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-02-01: 30종목 선정
+2026-04-05 22:01:49.341 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-03-01: 30종목 선정
+2026-04-05 22:01:49.367 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-04-01: 30종목 선정
+2026-04-05 22:01:49.391 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-05-01: 30종목 선정
+2026-04-05 22:01:49.415 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-06-01: 30종목 선정
+2026-04-05 22:01:49.449 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-07-01: 30종목 선정
+2026-04-05 22:01:49.475 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-08-01: 30종목 선정
+2026-04-05 22:01:49.503 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-09-01: 30종목 선정
+2026-04-05 22:01:49.534 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-10-01: 30종목 선정
+2026-04-05 22:01:49.561 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-11-01: 30종목 선정
+2026-04-05 22:01:49.586 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-12-01: 30종목 선정
+2026-04-05 22:01:49.612 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-01-01: 30종목 선정
+2026-04-05 22:01:49.644 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-02-01: 30종목 선정
+2026-04-05 22:01:49.680 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-03-01: 30종목 선정
+2026-04-05 22:01:49.710 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-04-01: 30종목 선정
+2026-04-05 22:01:49.747 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-05-01: 30종목 선정
+2026-04-05 22:01:49.780 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-06-01: 30종목 선정
+2026-04-05 22:01:49.820 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-07-01: 30종목 선정
+2026-04-05 22:01:49.859 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-08-01: 30종목 선정
+2026-04-05 22:01:49.894 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-09-01: 30종목 선정
+2026-04-05 22:01:49.927 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-10-01: 30종목 선정
+2026-04-05 22:01:49.960 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-11-01: 30종목 선정
+2026-04-05 22:01:49.989 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-12-01: 30종목 선정
+2026-04-05 22:01:50.016 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-01-01: 30종목 선정
+2026-04-05 22:01:50.054 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-02-01: 30종목 선정
+2026-04-05 22:01:50.086 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-03-01: 30종목 선정
+2026-04-05 22:01:50.122 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-04-01: 30종목 선정
+2026-04-05 22:01:50.157 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-05-01: 30종목 선정
+2026-04-05 22:01:50.190 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-06-01: 30종목 선정
+2026-04-05 22:01:50.227 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-07-01: 30종목 선정
+2026-04-05 22:01:50.258 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-08-01: 30종목 선정
+2026-04-05 22:01:50.290 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-09-01: 30종목 선정
+2026-04-05 22:01:50.321 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-10-01: 30종목 선정
+2026-04-05 22:01:50.357 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-11-01: 30종목 선정
+2026-04-05 22:01:50.386 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-12-01: 30종목 선정
+2026-04-05 22:01:50.420 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-01-01: 30종목 선정
+2026-04-05 22:01:50.451 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-02-01: 30종목 선정
+2026-04-05 22:01:50.479 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-03-01: 30종목 선정
+2026-04-05 22:01:50.508 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-04-01: 30종목 선정
+2026-04-05 22:01:50.538 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-05-01: 30종목 선정
+2026-04-05 22:01:50.566 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-06-01: 30종목 선정
+2026-04-05 22:01:50.595 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-07-01: 30종목 선정
+2026-04-05 22:01:50.624 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-08-01: 30종목 선정
+2026-04-05 22:01:50.655 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-09-01: 30종목 선정
+2026-04-05 22:01:50.689 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-10-01: 30종목 선정
+2026-04-05 22:01:50.722 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-11-01: 30종목 선정
+2026-04-05 22:01:50.752 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-12-01: 30종목 선정
+2026-04-05 22:01:50.782 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-01-01: 30종목 선정
+2026-04-05 22:01:50.812 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-02-01: 30종목 선정
+2026-04-05 22:01:50.842 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-03-01: 30종목 선정
+2026-04-05 22:01:50.871 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-04-01: 30종목 선정
+2026-04-05 22:01:50.899 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-05-01: 30종목 선정
+2026-04-05 22:01:50.929 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-06-01: 30종목 선정
+2026-04-05 22:01:50.961 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-07-01: 30종목 선정
+2026-04-05 22:01:50.991 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-08-01: 30종목 선정
+2026-04-05 22:01:51.019 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-09-01: 30종목 선정
+2026-04-05 22:01:51.053 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-10-01: 30종목 선정
+2026-04-05 22:01:51.083 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-11-01: 30종목 선정
+2026-04-05 22:01:51.116 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-12-01: 30종목 선정
+2026-04-05 22:01:51.153 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-01-01: 30종목 선정
+2026-04-05 22:01:51.183 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-02-01: 30종목 선정
+2026-04-05 22:01:51.214 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-03-01: 30종목 선정
+2026-04-05 22:01:51.256 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-04-01: 30종목 선정
+2026-04-05 22:01:51.292 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-05-01: 30종목 선정
+2026-04-05 22:01:51.327 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-06-01: 30종목 선정
+2026-04-05 22:01:51.361 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-07-01: 30종목 선정
+2026-04-05 22:01:51.394 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-08-01: 30종목 선정
+2026-04-05 22:01:51.429 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-09-01: 30종목 선정
+2026-04-05 22:01:51.473 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-10-01: 30종목 선정
+2026-04-05 22:01:51.508 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-11-01: 30종목 선정
+2026-04-05 22:01:51.545 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-12-01: 30종목 선정
+2026-04-05 22:01:51.585 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-01-01: 30종목 선정
+2026-04-05 22:01:51.618 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-02-01: 30종목 선정
+2026-04-05 22:01:51.655 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-03-01: 30종목 선정
+2026-04-05 22:01:51.695 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-04-01: 30종목 선정
+2026-04-05 22:01:51.739 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-05-01: 30종목 선정
+2026-04-05 22:01:51.783 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-06-01: 30종목 선정
+2026-04-05 22:01:51.817 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-07-01: 30종목 선정
+2026-04-05 22:01:51.849 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-08-01: 30종목 선정
+2026-04-05 22:01:51.880 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-09-01: 30종목 선정
+2026-04-05 22:01:51.912 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-10-01: 30종목 선정
+2026-04-05 22:01:51.942 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-11-01: 30종목 선정
+2026-04-05 22:01:51.976 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-12-01: 30종목 선정
+2026-04-05 22:01:51.977 | INFO     | __main__:run_backtest:78 - Step 5: ML 모델 학습
+2026-04-05 22:01:51.977 | INFO     | __main__:_train_models_if_needed:173 - 모델 학습 시작: decision_tree
+2026-04-05 22:02:33.198 | INFO     | __main__:run_backtest:39 - ============================================================
+2026-04-05 22:02:33.199 | INFO     | __main__:run_backtest:40 - SuperTrader 백테스트 시작
+2026-04-05 22:02:33.199 | INFO     | __main__:run_backtest:41 - ============================================================
+2026-04-05 22:02:35.776 | INFO     | __main__:run_backtest:52 - Step 1: 유니버스 구성
+2026-04-05 22:02:36.127 | INFO     | src.data.market_data:get_universe:65 - 유니버스 구성: 311종목 (KOSPI)
+2026-04-05 22:02:36.128 | INFO     | __main__:run_backtest:58 - 유니버스: 311종목
+2026-04-05 22:02:36.128 | INFO     | __main__:run_backtest:61 - Step 2: OHLCV 데이터 로드
+2026-04-05 22:03:07.350 | INFO     | src.data.market_data:get_ohlcv_batch:158 - OHLCV 로드 진행: 50/50 (50종목 성공)
+2026-04-05 22:03:07.351 | INFO     | src.data.market_data:get_ohlcv_batch:160 - OHLCV 배치 로드 완료: 50/50종목
+2026-04-05 22:03:07.351 | INFO     | __main__:run_backtest:64 - OHLCV 로드: 50종목
+2026-04-05 22:03:07.351 | INFO     | __main__:run_backtest:67 - Step 3: 리밸런싱 스케줄 생성
+2026-04-05 22:03:07.352 | INFO     | __main__:run_backtest:69 - 리밸런싱 날짜: 84회
+2026-04-05 22:03:07.352 | INFO     | __main__:run_backtest:72 - Step 4: 종목풀 히스토리 구축
+2026-04-05 22:03:07.385 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-01-01: 30종목 선정
+2026-04-05 22:03:07.420 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-02-01: 30종목 선정
+2026-04-05 22:03:07.448 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-03-01: 30종목 선정
+2026-04-05 22:03:07.482 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-04-01: 30종목 선정
+2026-04-05 22:03:07.510 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-05-01: 30종목 선정
+2026-04-05 22:03:07.535 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-06-01: 30종목 선정
+2026-04-05 22:03:07.563 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-07-01: 30종목 선정
+2026-04-05 22:03:07.588 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-08-01: 30종목 선정
+2026-04-05 22:03:07.614 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-09-01: 30종목 선정
+2026-04-05 22:03:07.647 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-10-01: 30종목 선정
+2026-04-05 22:03:07.673 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-11-01: 30종목 선정
+2026-04-05 22:03:07.705 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-12-01: 30종목 선정
+2026-04-05 22:03:07.751 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-01-01: 30종목 선정
+2026-04-05 22:03:07.802 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-02-01: 30종목 선정
+2026-04-05 22:03:07.844 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-03-01: 30종목 선정
+2026-04-05 22:03:07.944 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-04-01: 30종목 선정
+2026-04-05 22:03:08.070 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-05-01: 30종목 선정
+2026-04-05 22:03:08.114 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-06-01: 30종목 선정
+2026-04-05 22:03:08.148 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-07-01: 30종목 선정
+2026-04-05 22:03:08.183 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-08-01: 30종목 선정
+2026-04-05 22:03:08.217 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-09-01: 30종목 선정
+2026-04-05 22:03:08.251 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-10-01: 30종목 선정
+2026-04-05 22:03:08.340 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-11-01: 30종목 선정
+2026-04-05 22:03:08.376 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-12-01: 30종목 선정
+2026-04-05 22:03:08.413 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-01-01: 30종목 선정
+2026-04-05 22:03:08.446 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-02-01: 30종목 선정
+2026-04-05 22:03:08.477 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-03-01: 30종목 선정
+2026-04-05 22:03:08.504 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-04-01: 30종목 선정
+2026-04-05 22:03:08.534 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-05-01: 30종목 선정
+2026-04-05 22:03:08.562 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-06-01: 30종목 선정
+2026-04-05 22:03:08.591 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-07-01: 30종목 선정
+2026-04-05 22:03:08.626 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-08-01: 30종목 선정
+2026-04-05 22:03:08.653 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-09-01: 30종목 선정
+2026-04-05 22:03:08.682 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-10-01: 30종목 선정
+2026-04-05 22:03:08.710 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-11-01: 30종목 선정
+2026-04-05 22:03:08.742 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-12-01: 30종목 선정
+2026-04-05 22:03:08.776 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-01-01: 30종목 선정
+2026-04-05 22:03:08.819 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-02-01: 30종목 선정
+2026-04-05 22:03:08.859 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-03-01: 30종목 선정
+2026-04-05 22:03:08.895 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-04-01: 30종목 선정
+2026-04-05 22:03:08.926 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-05-01: 30종목 선정
+2026-04-05 22:03:08.956 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-06-01: 30종목 선정
+2026-04-05 22:03:08.985 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-07-01: 30종목 선정
+2026-04-05 22:03:09.013 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-08-01: 30종목 선정
+2026-04-05 22:03:09.041 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-09-01: 30종목 선정
+2026-04-05 22:03:09.070 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-10-01: 30종목 선정
+2026-04-05 22:03:09.104 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-11-01: 30종목 선정
+2026-04-05 22:03:09.137 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-12-01: 30종목 선정
+2026-04-05 22:03:09.166 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-01-01: 30종목 선정
+2026-04-05 22:03:09.194 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-02-01: 30종목 선정
+2026-04-05 22:03:09.223 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-03-01: 30종목 선정
+2026-04-05 22:03:09.251 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-04-01: 30종목 선정
+2026-04-05 22:03:09.279 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-05-01: 30종목 선정
+2026-04-05 22:03:09.309 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-06-01: 30종목 선정
+2026-04-05 22:03:09.336 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-07-01: 30종목 선정
+2026-04-05 22:03:09.365 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-08-01: 30종목 선정
+2026-04-05 22:03:09.396 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-09-01: 30종목 선정
+2026-04-05 22:03:09.431 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-10-01: 30종목 선정
+2026-04-05 22:03:09.459 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-11-01: 30종목 선정
+2026-04-05 22:03:09.487 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-12-01: 30종목 선정
+2026-04-05 22:03:09.523 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-01-01: 30종목 선정
+2026-04-05 22:03:09.552 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-02-01: 30종목 선정
+2026-04-05 22:03:09.579 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-03-01: 30종목 선정
+2026-04-05 22:03:09.610 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-04-01: 30종목 선정
+2026-04-05 22:03:09.644 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-05-01: 30종목 선정
+2026-04-05 22:03:09.672 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-06-01: 30종목 선정
+2026-04-05 22:03:09.704 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-07-01: 30종목 선정
+2026-04-05 22:03:09.734 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-08-01: 30종목 선정
+2026-04-05 22:03:09.765 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-09-01: 30종목 선정
+2026-04-05 22:03:09.795 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-10-01: 30종목 선정
+2026-04-05 22:03:09.825 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-11-01: 30종목 선정
+2026-04-05 22:03:09.855 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-12-01: 30종목 선정
+2026-04-05 22:03:09.886 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-01-01: 30종목 선정
+2026-04-05 22:03:09.917 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-02-01: 30종목 선정
+2026-04-05 22:03:09.949 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-03-01: 30종목 선정
+2026-04-05 22:03:09.978 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-04-01: 30종목 선정
+2026-04-05 22:03:10.012 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-05-01: 30종목 선정
+2026-04-05 22:03:10.056 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-06-01: 30종목 선정
+2026-04-05 22:03:10.089 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-07-01: 30종목 선정
+2026-04-05 22:03:10.123 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-08-01: 30종목 선정
+2026-04-05 22:03:10.154 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-09-01: 30종목 선정
+2026-04-05 22:03:10.186 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-10-01: 30종목 선정
+2026-04-05 22:03:10.221 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-11-01: 30종목 선정
+2026-04-05 22:03:10.250 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-12-01: 30종목 선정
+2026-04-05 22:03:10.251 | INFO     | __main__:run_backtest:78 - Step 5: ML 모델 학습
+2026-04-05 22:03:10.251 | INFO     | __main__:_train_models_if_needed:173 - 모델 학습 시작: decision_tree
+2026-04-05 22:03:19.698 | INFO     | src.timing.decision_tree:train:63 - DT 학습 완료: accuracy=0.443, samples=78904
+2026-04-05 22:03:19.775 | INFO     | src.timing.decision_tree:save:107 - DT 모델 저장: models\decision_tree_timing.pkl
+2026-04-05 22:03:19.782 | INFO     | __main__:_train_models_if_needed:179 - 모델 학습 완료: decision_tree
+2026-04-05 22:03:19.782 | INFO     | __main__:_train_models_if_needed:173 - 모델 학습 시작: xgboost
+2026-04-05 22:03:46.767 | INFO     | __main__:run_backtest:39 - ============================================================
+2026-04-05 22:03:46.768 | INFO     | __main__:run_backtest:40 - SuperTrader 백테스트 시작
+2026-04-05 22:03:46.768 | INFO     | __main__:run_backtest:41 - ============================================================
+2026-04-05 22:03:49.216 | INFO     | __main__:run_backtest:52 - Step 1: 유니버스 구성
+2026-04-05 22:03:49.524 | INFO     | src.data.market_data:get_universe:65 - 유니버스 구성: 311종목 (KOSPI)
+2026-04-05 22:03:49.525 | INFO     | __main__:run_backtest:58 - 유니버스: 311종목
+2026-04-05 22:03:49.525 | INFO     | __main__:run_backtest:61 - Step 2: OHLCV 데이터 로드
+2026-04-05 22:04:21.259 | INFO     | src.data.market_data:get_ohlcv_batch:158 - OHLCV 로드 진행: 50/50 (50종목 성공)
+2026-04-05 22:04:21.259 | INFO     | src.data.market_data:get_ohlcv_batch:160 - OHLCV 배치 로드 완료: 50/50종목
+2026-04-05 22:04:21.259 | INFO     | __main__:run_backtest:64 - OHLCV 로드: 50종목
+2026-04-05 22:04:21.259 | INFO     | __main__:run_backtest:67 - Step 3: 리밸런싱 스케줄 생성
+2026-04-05 22:04:21.260 | INFO     | __main__:run_backtest:69 - 리밸런싱 날짜: 84회
+2026-04-05 22:04:21.260 | INFO     | __main__:run_backtest:72 - Step 4: 종목풀 히스토리 구축
+2026-04-05 22:04:21.291 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-01-01: 30종목 선정
+2026-04-05 22:04:21.324 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-02-01: 30종목 선정
+2026-04-05 22:04:21.353 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-03-01: 30종목 선정
+2026-04-05 22:04:21.387 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-04-01: 30종목 선정
+2026-04-05 22:04:21.433 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-05-01: 30종목 선정
+2026-04-05 22:04:21.467 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-06-01: 30종목 선정
+2026-04-05 22:04:21.506 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-07-01: 30종목 선정
+2026-04-05 22:04:21.547 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-08-01: 30종목 선정
+2026-04-05 22:04:21.584 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-09-01: 30종목 선정
+2026-04-05 22:04:21.615 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-10-01: 30종목 선정
+2026-04-05 22:04:21.655 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-11-01: 30종목 선정
+2026-04-05 22:04:21.687 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-12-01: 30종목 선정
+2026-04-05 22:04:21.740 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-01-01: 30종목 선정
+2026-04-05 22:04:21.790 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-02-01: 30종목 선정
+2026-04-05 22:04:21.840 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-03-01: 30종목 선정
+2026-04-05 22:04:21.891 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-04-01: 30종목 선정
+2026-04-05 22:04:21.937 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-05-01: 30종목 선정
+2026-04-05 22:04:21.971 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-06-01: 30종목 선정
+2026-04-05 22:04:22.000 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-07-01: 30종목 선정
+2026-04-05 22:04:22.034 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-08-01: 30종목 선정
+2026-04-05 22:04:22.069 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-09-01: 30종목 선정
+2026-04-05 22:04:22.103 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-10-01: 30종목 선정
+2026-04-05 22:04:22.140 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-11-01: 30종목 선정
+2026-04-05 22:04:22.175 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-12-01: 30종목 선정
+2026-04-05 22:04:22.204 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-01-01: 30종목 선정
+2026-04-05 22:04:22.238 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-02-01: 30종목 선정
+2026-04-05 22:04:22.267 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-03-01: 30종목 선정
+2026-04-05 22:04:22.297 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-04-01: 30종목 선정
+2026-04-05 22:04:22.326 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-05-01: 30종목 선정
+2026-04-05 22:04:22.357 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-06-01: 30종목 선정
+2026-04-05 22:04:22.391 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-07-01: 30종목 선정
+2026-04-05 22:04:22.424 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-08-01: 30종목 선정
+2026-04-05 22:04:22.467 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-09-01: 30종목 선정
+2026-04-05 22:04:22.507 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-10-01: 30종목 선정
+2026-04-05 22:04:22.549 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-11-01: 30종목 선정
+2026-04-05 22:04:22.587 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-12-01: 30종목 선정
+2026-04-05 22:04:22.628 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-01-01: 30종목 선정
+2026-04-05 22:04:22.668 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-02-01: 30종목 선정
+2026-04-05 22:04:22.706 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-03-01: 30종목 선정
+2026-04-05 22:04:22.751 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-04-01: 30종목 선정
+2026-04-05 22:04:22.788 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-05-01: 30종목 선정
+2026-04-05 22:04:22.834 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-06-01: 30종목 선정
+2026-04-05 22:04:22.868 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-07-01: 30종목 선정
+2026-04-05 22:04:22.901 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-08-01: 30종목 선정
+2026-04-05 22:04:22.935 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-09-01: 30종목 선정
+2026-04-05 22:04:22.969 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-10-01: 30종목 선정
+2026-04-05 22:04:23.014 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-11-01: 30종목 선정
+2026-04-05 22:04:23.056 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-12-01: 30종목 선정
+2026-04-05 22:04:23.091 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-01-01: 30종목 선정
+2026-04-05 22:04:23.125 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-02-01: 30종목 선정
+2026-04-05 22:04:23.157 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-03-01: 30종목 선정
+2026-04-05 22:04:23.188 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-04-01: 30종목 선정
+2026-04-05 22:04:23.225 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-05-01: 30종목 선정
+2026-04-05 22:04:23.256 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-06-01: 30종목 선정
+2026-04-05 22:04:23.288 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-07-01: 30종목 선정
+2026-04-05 22:04:23.318 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-08-01: 30종목 선정
+2026-04-05 22:04:23.350 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-09-01: 30종목 선정
+2026-04-05 22:04:23.384 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-10-01: 30종목 선정
+2026-04-05 22:04:23.412 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-11-01: 30종목 선정
+2026-04-05 22:04:23.443 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-12-01: 30종목 선정
+2026-04-05 22:04:23.471 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-01-01: 30종목 선정
+2026-04-05 22:04:23.499 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-02-01: 30종목 선정
+2026-04-05 22:04:23.527 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-03-01: 30종목 선정
+2026-04-05 22:04:23.556 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-04-01: 30종목 선정
+2026-04-05 22:04:23.584 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-05-01: 30종목 선정
+2026-04-05 22:04:23.616 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-06-01: 30종목 선정
+2026-04-05 22:04:23.645 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-07-01: 30종목 선정
+2026-04-05 22:04:23.680 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-08-01: 30종목 선정
+2026-04-05 22:04:23.710 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-09-01: 30종목 선정
+2026-04-05 22:04:23.744 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-10-01: 30종목 선정
+2026-04-05 22:04:23.773 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-11-01: 30종목 선정
+2026-04-05 22:04:23.805 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-12-01: 30종목 선정
+2026-04-05 22:04:23.838 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-01-01: 30종목 선정
+2026-04-05 22:04:23.868 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-02-01: 30종목 선정
+2026-04-05 22:04:23.904 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-03-01: 30종목 선정
+2026-04-05 22:04:23.933 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-04-01: 30종목 선정
+2026-04-05 22:04:23.964 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-05-01: 30종목 선정
+2026-04-05 22:04:24.000 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-06-01: 30종목 선정
+2026-04-05 22:04:24.036 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-07-01: 30종목 선정
+2026-04-05 22:04:24.074 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-08-01: 30종목 선정
+2026-04-05 22:04:24.113 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-09-01: 30종목 선정
+2026-04-05 22:04:24.155 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-10-01: 30종목 선정
+2026-04-05 22:04:24.192 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-11-01: 30종목 선정
+2026-04-05 22:04:24.229 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-12-01: 30종목 선정
+2026-04-05 22:04:24.230 | INFO     | __main__:run_backtest:78 - Step 5: ML 모델 학습
+2026-04-05 22:04:24.230 | INFO     | __main__:_train_models_if_needed:170 - 기존 모델 사용: decision_tree (models\decision_tree_timing.pkl)
+2026-04-05 22:04:24.231 | INFO     | __main__:_train_models_if_needed:173 - 모델 학습 시작: xgboost
+2026-04-05 22:04:55.338 | INFO     | src.timing.gradient_boost:train:110 - xgboost 학습 완료: accuracy=0.635, samples=78904
+2026-04-05 22:04:55.421 | INFO     | __main__:_train_models_if_needed:179 - 모델 학습 완료: xgboost
+2026-04-05 22:04:55.421 | INFO     | __main__:run_backtest:82 - Step 6: 전략 비교 백테스트 실행
+2026-04-05 22:04:55.772 | INFO     | src.timing.decision_tree:load:114 - DT 모델 로드: models\decision_tree_timing.pkl
+2026-04-05 22:04:55.773 | INFO     | src.timing.predictor:__init__:21 - 타이밍 모델 로드: decision_tree (models\decision_tree_timing.pkl)
+2026-04-05 22:04:55.849 | INFO     | src.timing.predictor:__init__:21 - 타이밍 모델 로드: xgboost (models\xgboost_timing.pkl)
+2026-04-05 22:04:55.850 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_only
+2026-04-05 22:07:58.690 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_macd
+2026-04-05 22:13:56.247 | INFO     | __main__:run_backtest:39 - ============================================================
+2026-04-05 22:13:56.248 | INFO     | __main__:run_backtest:40 - SuperTrader 백테스트 시작
+2026-04-05 22:13:56.248 | INFO     | __main__:run_backtest:41 - ============================================================
+2026-04-05 22:14:03.673 | INFO     | __main__:run_backtest:52 - Step 1: 유니버스 구성
+2026-04-05 22:14:03.968 | INFO     | src.data.market_data:get_universe:65 - 유니버스 구성: 311종목 (KOSPI)
+2026-04-05 22:14:03.968 | INFO     | __main__:run_backtest:58 - 유니버스: 311종목
+2026-04-05 22:14:03.969 | INFO     | __main__:run_backtest:61 - Step 2: OHLCV 데이터 로드
+2026-04-05 22:14:36.666 | INFO     | src.data.market_data:get_ohlcv_batch:158 - OHLCV 로드 진행: 50/50 (50종목 성공)
+2026-04-05 22:14:36.667 | INFO     | src.data.market_data:get_ohlcv_batch:160 - OHLCV 배치 로드 완료: 50/50종목
+2026-04-05 22:14:36.668 | INFO     | __main__:run_backtest:64 - OHLCV 로드: 50종목
+2026-04-05 22:14:36.668 | INFO     | __main__:run_backtest:67 - Step 3: 리밸런싱 스케줄 생성
+2026-04-05 22:14:36.668 | INFO     | __main__:run_backtest:69 - 리밸런싱 날짜: 84회
+2026-04-05 22:14:36.668 | INFO     | __main__:run_backtest:72 - Step 4: 종목풀 히스토리 구축
+2026-04-05 22:14:36.700 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-01-01: 30종목 선정
+2026-04-05 22:14:36.737 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-02-01: 30종목 선정
+2026-04-05 22:14:36.770 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-03-01: 30종목 선정
+2026-04-05 22:14:36.807 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-04-01: 30종목 선정
+2026-04-05 22:14:36.848 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-05-01: 30종목 선정
+2026-04-05 22:14:36.882 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-06-01: 30종목 선정
+2026-04-05 22:14:36.921 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-07-01: 30종목 선정
+2026-04-05 22:14:36.960 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-08-01: 30종목 선정
+2026-04-05 22:14:37.010 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-09-01: 30종목 선정
+2026-04-05 22:14:37.057 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-10-01: 30종목 선정
+2026-04-05 22:14:37.106 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-11-01: 30종목 선정
+2026-04-05 22:14:37.161 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-12-01: 30종목 선정
+2026-04-05 22:14:37.206 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-01-01: 30종목 선정
+2026-04-05 22:14:37.255 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-02-01: 30종목 선정
+2026-04-05 22:14:37.292 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-03-01: 30종목 선정
+2026-04-05 22:14:37.332 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-04-01: 30종목 선정
+2026-04-05 22:14:37.365 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-05-01: 30종목 선정
+2026-04-05 22:14:37.402 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-06-01: 30종목 선정
+2026-04-05 22:14:37.440 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-07-01: 30종목 선정
+2026-04-05 22:14:37.479 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-08-01: 30종목 선정
+2026-04-05 22:14:37.510 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-09-01: 30종목 선정
+2026-04-05 22:14:37.541 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-10-01: 30종목 선정
+2026-04-05 22:14:37.571 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-11-01: 30종목 선정
+2026-04-05 22:14:37.601 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-12-01: 30종목 선정
+2026-04-05 22:14:37.632 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-01-01: 30종목 선정
+2026-04-05 22:14:37.664 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-02-01: 30종목 선정
+2026-04-05 22:14:37.693 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-03-01: 30종목 선정
+2026-04-05 22:14:37.724 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-04-01: 30종목 선정
+2026-04-05 22:14:37.757 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-05-01: 30종목 선정
+2026-04-05 22:14:37.793 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-06-01: 30종목 선정
+2026-04-05 22:14:37.827 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-07-01: 30종목 선정
+2026-04-05 22:14:37.858 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-08-01: 30종목 선정
+2026-04-05 22:14:37.890 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-09-01: 30종목 선정
+2026-04-05 22:14:37.920 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-10-01: 30종목 선정
+2026-04-05 22:14:37.949 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-11-01: 30종목 선정
+2026-04-05 22:14:37.983 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-12-01: 30종목 선정
+2026-04-05 22:14:38.015 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-01-01: 30종목 선정
+2026-04-05 22:14:38.047 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-02-01: 30종목 선정
+2026-04-05 22:14:38.079 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-03-01: 30종목 선정
+2026-04-05 22:14:38.112 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-04-01: 30종목 선정
+2026-04-05 22:14:38.143 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-05-01: 30종목 선정
+2026-04-05 22:14:38.177 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-06-01: 30종목 선정
+2026-04-05 22:14:38.207 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-07-01: 30종목 선정
+2026-04-05 22:14:38.238 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-08-01: 30종목 선정
+2026-04-05 22:14:38.266 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-09-01: 30종목 선정
+2026-04-05 22:14:38.299 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-10-01: 30종목 선정
+2026-04-05 22:14:38.330 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-11-01: 30종목 선정
+2026-04-05 22:14:38.364 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-12-01: 30종목 선정
+2026-04-05 22:14:38.393 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-01-01: 30종목 선정
+2026-04-05 22:14:38.422 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-02-01: 30종목 선정
+2026-04-05 22:14:38.453 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-03-01: 30종목 선정
+2026-04-05 22:14:38.482 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-04-01: 30종목 선정
+2026-04-05 22:14:38.515 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-05-01: 30종목 선정
+2026-04-05 22:14:38.547 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-06-01: 30종목 선정
+2026-04-05 22:14:38.582 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-07-01: 30종목 선정
+2026-04-05 22:14:38.614 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-08-01: 30종목 선정
+2026-04-05 22:14:38.645 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-09-01: 30종목 선정
+2026-04-05 22:14:38.676 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-10-01: 30종목 선정
+2026-04-05 22:14:38.710 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-11-01: 30종목 선정
+2026-04-05 22:14:38.747 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-12-01: 30종목 선정
+2026-04-05 22:14:38.785 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-01-01: 30종목 선정
+2026-04-05 22:14:38.822 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-02-01: 30종목 선정
+2026-04-05 22:14:38.857 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-03-01: 30종목 선정
+2026-04-05 22:14:38.891 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-04-01: 30종목 선정
+2026-04-05 22:14:38.926 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-05-01: 30종목 선정
+2026-04-05 22:14:38.964 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-06-01: 30종목 선정
+2026-04-05 22:14:38.999 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-07-01: 30종목 선정
+2026-04-05 22:14:39.047 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-08-01: 30종목 선정
+2026-04-05 22:14:39.102 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-09-01: 30종목 선정
+2026-04-05 22:14:39.155 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-10-01: 30종목 선정
+2026-04-05 22:14:39.197 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-11-01: 30종목 선정
+2026-04-05 22:14:39.236 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-12-01: 30종목 선정
+2026-04-05 22:14:39.284 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-01-01: 30종목 선정
+2026-04-05 22:14:39.320 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-02-01: 30종목 선정
+2026-04-05 22:14:39.355 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-03-01: 30종목 선정
+2026-04-05 22:14:39.395 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-04-01: 30종목 선정
+2026-04-05 22:14:39.434 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-05-01: 30종목 선정
+2026-04-05 22:14:39.472 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-06-01: 30종목 선정
+2026-04-05 22:14:39.515 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-07-01: 30종목 선정
+2026-04-05 22:14:39.556 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-08-01: 30종목 선정
+2026-04-05 22:14:39.599 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-09-01: 30종목 선정
+2026-04-05 22:14:39.643 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-10-01: 30종목 선정
+2026-04-05 22:14:39.695 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-11-01: 30종목 선정
+2026-04-05 22:14:39.744 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-12-01: 30종목 선정
+2026-04-05 22:14:39.744 | INFO     | __main__:run_backtest:78 - Step 5: ML 모델 학습
+2026-04-05 22:14:39.745 | INFO     | __main__:_train_models_if_needed:170 - 기존 모델 사용: decision_tree (models\decision_tree_timing.pkl)
+2026-04-05 22:14:39.745 | INFO     | __main__:_train_models_if_needed:170 - 기존 모델 사용: xgboost (models\xgboost_timing.pkl)
+2026-04-05 22:14:39.746 | INFO     | __main__:run_backtest:82 - Step 6: 전략 비교 백테스트 실행
+2026-04-05 22:14:50.148 | INFO     | src.timing.decision_tree:load:114 - DT 모델 로드: models\decision_tree_timing.pkl
+2026-04-05 22:14:50.148 | INFO     | src.timing.predictor:__init__:21 - 타이밍 모델 로드: decision_tree (models\decision_tree_timing.pkl)
+2026-04-05 22:14:50.764 | INFO     | src.timing.predictor:__init__:21 - 타이밍 모델 로드: xgboost (models\xgboost_timing.pkl)
+2026-04-05 22:14:50.764 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_only
+2026-04-05 22:17:31.533 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_macd
+2026-04-05 22:52:58.823 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_kdj
+2026-04-05 23:02:22.513 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_kdj
+2026-04-05 23:15:59.474 | INFO     | __main__:run_backtest:39 - ============================================================
+2026-04-05 23:15:59.475 | INFO     | __main__:run_backtest:40 - SuperTrader 백테스트 시작
+2026-04-05 23:15:59.475 | INFO     | __main__:run_backtest:41 - ============================================================
+2026-04-05 23:16:06.948 | INFO     | __main__:run_backtest:52 - Step 1: 유니버스 구성
+2026-04-05 23:16:07.207 | INFO     | src.data.market_data:get_universe:65 - 유니버스 구성: 311종목 (KOSPI)
+2026-04-05 23:16:07.208 | INFO     | __main__:run_backtest:58 - 유니버스: 311종목
+2026-04-05 23:16:07.208 | INFO     | __main__:run_backtest:61 - Step 2: OHLCV 데이터 로드
+2026-04-05 23:16:36.980 | INFO     | src.data.market_data:get_ohlcv_batch:158 - OHLCV 로드 진행: 50/50 (50종목 성공)
+2026-04-05 23:16:36.980 | INFO     | src.data.market_data:get_ohlcv_batch:160 - OHLCV 배치 로드 완료: 50/50종목
+2026-04-05 23:16:36.981 | INFO     | __main__:run_backtest:64 - OHLCV 로드: 50종목
+2026-04-05 23:16:36.981 | INFO     | __main__:run_backtest:67 - Step 3: 리밸런싱 스케줄 생성
+2026-04-05 23:16:36.981 | INFO     | __main__:run_backtest:69 - 리밸런싱 날짜: 84회
+2026-04-05 23:16:36.981 | INFO     | __main__:run_backtest:72 - Step 4: 종목풀 히스토리 구축
+2026-04-05 23:16:37.001 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-01-01: 30종목 선정
+2026-04-05 23:16:37.021 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-02-01: 30종목 선정
+2026-04-05 23:16:37.043 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-03-01: 30종목 선정
+2026-04-05 23:16:37.065 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-04-01: 30종목 선정
+2026-04-05 23:16:37.087 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-05-01: 30종목 선정
+2026-04-05 23:16:37.111 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-06-01: 30종목 선정
+2026-04-05 23:16:37.137 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-07-01: 30종목 선정
+2026-04-05 23:16:37.160 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-08-01: 30종목 선정
+2026-04-05 23:16:37.185 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-09-01: 30종목 선정
+2026-04-05 23:16:37.213 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-10-01: 30종목 선정
+2026-04-05 23:16:37.240 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-11-01: 30종목 선정
+2026-04-05 23:16:37.267 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-12-01: 30종목 선정
+2026-04-05 23:16:37.293 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-01-01: 30종목 선정
+2026-04-05 23:16:37.320 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-02-01: 30종목 선정
+2026-04-05 23:16:37.347 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-03-01: 30종목 선정
+2026-04-05 23:16:37.375 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-04-01: 30종목 선정
+2026-04-05 23:16:37.399 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-05-01: 30종목 선정
+2026-04-05 23:16:37.428 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-06-01: 30종목 선정
+2026-04-05 23:16:37.453 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-07-01: 30종목 선정
+2026-04-05 23:16:37.482 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-08-01: 30종목 선정
+2026-04-05 23:16:37.513 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-09-01: 30종목 선정
+2026-04-05 23:16:37.540 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-10-01: 30종목 선정
+2026-04-05 23:16:37.566 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-11-01: 30종목 선정
+2026-04-05 23:16:37.594 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-12-01: 30종목 선정
+2026-04-05 23:16:37.620 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-01-01: 30종목 선정
+2026-04-05 23:16:37.649 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-02-01: 30종목 선정
+2026-04-05 23:16:37.675 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-03-01: 30종목 선정
+2026-04-05 23:16:37.699 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-04-01: 30종목 선정
+2026-04-05 23:16:37.727 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-05-01: 30종목 선정
+2026-04-05 23:16:37.758 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-06-01: 30종목 선정
+2026-04-05 23:16:37.788 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-07-01: 30종목 선정
+2026-04-05 23:16:37.812 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-08-01: 30종목 선정
+2026-04-05 23:16:37.840 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-09-01: 30종목 선정
+2026-04-05 23:16:37.865 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-10-01: 30종목 선정
+2026-04-05 23:16:37.889 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-11-01: 30종목 선정
+2026-04-05 23:16:37.915 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-12-01: 30종목 선정
+2026-04-05 23:16:37.945 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-01-01: 30종목 선정
+2026-04-05 23:16:37.974 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-02-01: 30종목 선정
+2026-04-05 23:16:38.004 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-03-01: 30종목 선정
+2026-04-05 23:16:38.032 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-04-01: 30종목 선정
+2026-04-05 23:16:38.060 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-05-01: 30종목 선정
+2026-04-05 23:16:38.091 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-06-01: 30종목 선정
+2026-04-05 23:16:38.119 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-07-01: 30종목 선정
+2026-04-05 23:16:38.153 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-08-01: 30종목 선정
+2026-04-05 23:16:38.182 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-09-01: 30종목 선정
+2026-04-05 23:16:38.209 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-10-01: 30종목 선정
+2026-04-05 23:16:38.235 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-11-01: 30종목 선정
+2026-04-05 23:16:38.264 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-12-01: 30종목 선정
+2026-04-05 23:16:38.291 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-01-01: 30종목 선정
+2026-04-05 23:16:38.323 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-02-01: 30종목 선정
+2026-04-05 23:16:38.354 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-03-01: 30종목 선정
+2026-04-05 23:16:38.384 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-04-01: 30종목 선정
+2026-04-05 23:16:38.415 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-05-01: 30종목 선정
+2026-04-05 23:16:38.444 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-06-01: 30종목 선정
+2026-04-05 23:16:38.469 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-07-01: 30종목 선정
+2026-04-05 23:16:38.494 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-08-01: 30종목 선정
+2026-04-05 23:16:38.521 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-09-01: 30종목 선정
+2026-04-05 23:16:38.549 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-10-01: 30종목 선정
+2026-04-05 23:16:38.577 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-11-01: 30종목 선정
+2026-04-05 23:16:38.602 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-12-01: 30종목 선정
+2026-04-05 23:16:38.626 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-01-01: 30종목 선정
+2026-04-05 23:16:38.651 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-02-01: 30종목 선정
+2026-04-05 23:16:38.679 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-03-01: 30종목 선정
+2026-04-05 23:16:38.710 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-04-01: 30종목 선정
+2026-04-05 23:16:38.740 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-05-01: 30종목 선정
+2026-04-05 23:16:38.771 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-06-01: 30종목 선정
+2026-04-05 23:16:38.803 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-07-01: 30종목 선정
+2026-04-05 23:16:38.830 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-08-01: 30종목 선정
+2026-04-05 23:16:38.857 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-09-01: 30종목 선정
+2026-04-05 23:16:38.883 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-10-01: 30종목 선정
+2026-04-05 23:16:38.910 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-11-01: 30종목 선정
+2026-04-05 23:16:38.937 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-12-01: 30종목 선정
+2026-04-05 23:16:38.963 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-01-01: 30종목 선정
+2026-04-05 23:16:38.991 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-02-01: 30종목 선정
+2026-04-05 23:16:39.019 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-03-01: 30종목 선정
+2026-04-05 23:16:39.047 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-04-01: 30종목 선정
+2026-04-05 23:16:39.073 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-05-01: 30종목 선정
+2026-04-05 23:16:39.103 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-06-01: 30종목 선정
+2026-04-05 23:16:39.130 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-07-01: 30종목 선정
+2026-04-05 23:16:39.156 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-08-01: 30종목 선정
+2026-04-05 23:16:39.183 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-09-01: 30종목 선정
+2026-04-05 23:16:39.211 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-10-01: 30종목 선정
+2026-04-05 23:16:39.239 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-11-01: 30종목 선정
+2026-04-05 23:16:39.267 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-12-01: 30종목 선정
+2026-04-05 23:16:39.267 | INFO     | __main__:run_backtest:78 - Step 5: ML 모델 학습
+2026-04-05 23:16:39.268 | INFO     | __main__:_train_models_if_needed:170 - 기존 모델 사용: decision_tree (models\decision_tree_timing.pkl)
+2026-04-05 23:16:39.268 | INFO     | __main__:_train_models_if_needed:170 - 기존 모델 사용: xgboost (models\xgboost_timing.pkl)
+2026-04-05 23:16:39.268 | INFO     | __main__:run_backtest:82 - Step 6: 전략 비교 백테스트 실행
+2026-04-05 23:16:53.573 | INFO     | src.timing.decision_tree:load:114 - DT 모델 로드: models\decision_tree_timing.pkl
+2026-04-05 23:16:53.573 | INFO     | src.timing.predictor:__init__:21 - 타이밍 모델 로드: decision_tree (models\decision_tree_timing.pkl)
+2026-04-05 23:16:54.736 | INFO     | src.timing.predictor:__init__:21 - 타이밍 모델 로드: xgboost (models\xgboost_timing.pkl)
+2026-04-05 23:16:54.736 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_only
+2026-04-05 23:19:04.510 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_macd
+2026-04-05 23:33:12.905 | INFO     | __main__:run_backtest:39 - ============================================================
+2026-04-05 23:33:12.906 | INFO     | __main__:run_backtest:40 - SuperTrader 백테스트 시작
+2026-04-05 23:33:12.906 | INFO     | __main__:run_backtest:41 - ============================================================
+2026-04-05 23:33:14.384 | INFO     | __main__:run_backtest:52 - Step 1: 유니버스 구성
+2026-04-05 23:33:14.625 | INFO     | src.data.market_data:get_universe:65 - 유니버스 구성: 311종목 (KOSPI)
+2026-04-05 23:33:14.626 | INFO     | __main__:run_backtest:58 - 유니버스: 311종목
+2026-04-05 23:33:14.626 | INFO     | __main__:run_backtest:61 - Step 2: OHLCV 데이터 로드
+2026-04-05 23:33:42.909 | INFO     | src.data.market_data:get_ohlcv_batch:158 - OHLCV 로드 진행: 50/50 (50종목 성공)
+2026-04-05 23:33:42.909 | INFO     | src.data.market_data:get_ohlcv_batch:160 - OHLCV 배치 로드 완료: 50/50종목
+2026-04-05 23:33:42.909 | INFO     | __main__:run_backtest:64 - OHLCV 로드: 50종목
+2026-04-05 23:33:42.909 | INFO     | __main__:run_backtest:67 - Step 3: 리밸런싱 스케줄 생성
+2026-04-05 23:33:42.910 | INFO     | __main__:run_backtest:69 - 리밸런싱 날짜: 84회
+2026-04-05 23:33:42.910 | INFO     | __main__:run_backtest:72 - Step 4: 종목풀 히스토리 구축
+2026-04-05 23:33:42.933 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-01-01: 30종목 선정
+2026-04-05 23:33:42.953 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-02-01: 30종목 선정
+2026-04-05 23:33:42.973 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-03-01: 30종목 선정
+2026-04-05 23:33:42.993 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-04-01: 30종목 선정
+2026-04-05 23:33:43.015 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-05-01: 30종목 선정
+2026-04-05 23:33:43.040 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-06-01: 30종목 선정
+2026-04-05 23:33:43.067 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-07-01: 30종목 선정
+2026-04-05 23:33:43.088 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-08-01: 30종목 선정
+2026-04-05 23:33:43.113 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-09-01: 30종목 선정
+2026-04-05 23:33:43.135 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-10-01: 30종목 선정
+2026-04-05 23:33:43.162 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-11-01: 30종목 선정
+2026-04-05 23:33:43.186 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2018-12-01: 30종목 선정
+2026-04-05 23:33:43.209 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-01-01: 30종목 선정
+2026-04-05 23:33:43.232 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-02-01: 30종목 선정
+2026-04-05 23:33:43.254 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-03-01: 30종목 선정
+2026-04-05 23:33:43.276 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-04-01: 30종목 선정
+2026-04-05 23:33:43.297 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-05-01: 30종목 선정
+2026-04-05 23:33:43.319 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-06-01: 30종목 선정
+2026-04-05 23:33:43.342 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-07-01: 30종목 선정
+2026-04-05 23:33:43.367 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-08-01: 30종목 선정
+2026-04-05 23:33:43.393 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-09-01: 30종목 선정
+2026-04-05 23:33:43.419 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-10-01: 30종목 선정
+2026-04-05 23:33:43.448 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-11-01: 30종목 선정
+2026-04-05 23:33:43.473 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2019-12-01: 30종목 선정
+2026-04-05 23:33:43.500 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-01-01: 30종목 선정
+2026-04-05 23:33:43.526 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-02-01: 30종목 선정
+2026-04-05 23:33:43.548 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-03-01: 30종목 선정
+2026-04-05 23:33:43.571 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-04-01: 30종목 선정
+2026-04-05 23:33:43.592 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-05-01: 30종목 선정
+2026-04-05 23:33:43.614 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-06-01: 30종목 선정
+2026-04-05 23:33:43.638 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-07-01: 30종목 선정
+2026-04-05 23:33:43.660 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-08-01: 30종목 선정
+2026-04-05 23:33:43.684 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-09-01: 30종목 선정
+2026-04-05 23:33:43.707 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-10-01: 30종목 선정
+2026-04-05 23:33:43.731 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-11-01: 30종목 선정
+2026-04-05 23:33:43.756 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2020-12-01: 30종목 선정
+2026-04-05 23:33:43.779 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-01-01: 30종목 선정
+2026-04-05 23:33:43.805 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-02-01: 30종목 선정
+2026-04-05 23:33:43.830 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-03-01: 30종목 선정
+2026-04-05 23:33:43.860 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-04-01: 30종목 선정
+2026-04-05 23:33:43.884 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-05-01: 30종목 선정
+2026-04-05 23:33:43.907 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-06-01: 30종목 선정
+2026-04-05 23:33:43.932 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-07-01: 30종목 선정
+2026-04-05 23:33:43.960 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-08-01: 30종목 선정
+2026-04-05 23:33:43.984 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-09-01: 30종목 선정
+2026-04-05 23:33:44.008 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-10-01: 30종목 선정
+2026-04-05 23:33:44.039 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-11-01: 30종목 선정
+2026-04-05 23:33:44.068 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2021-12-01: 30종목 선정
+2026-04-05 23:33:44.095 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-01-01: 30종목 선정
+2026-04-05 23:33:44.122 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-02-01: 30종목 선정
+2026-04-05 23:33:44.147 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-03-01: 30종목 선정
+2026-04-05 23:33:44.174 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-04-01: 30종목 선정
+2026-04-05 23:33:44.198 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-05-01: 30종목 선정
+2026-04-05 23:33:44.222 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-06-01: 30종목 선정
+2026-04-05 23:33:44.246 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-07-01: 30종목 선정
+2026-04-05 23:33:44.270 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-08-01: 30종목 선정
+2026-04-05 23:33:44.293 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-09-01: 30종목 선정
+2026-04-05 23:33:44.316 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-10-01: 30종목 선정
+2026-04-05 23:33:44.341 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-11-01: 30종목 선정
+2026-04-05 23:33:44.370 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2022-12-01: 30종목 선정
+2026-04-05 23:33:44.399 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-01-01: 30종목 선정
+2026-04-05 23:33:44.424 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-02-01: 30종목 선정
+2026-04-05 23:33:44.447 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-03-01: 30종목 선정
+2026-04-05 23:33:44.474 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-04-01: 30종목 선정
+2026-04-05 23:33:44.500 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-05-01: 30종목 선정
+2026-04-05 23:33:44.525 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-06-01: 30종목 선정
+2026-04-05 23:33:44.551 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-07-01: 30종목 선정
+2026-04-05 23:33:44.575 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-08-01: 30종목 선정
+2026-04-05 23:33:44.599 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-09-01: 30종목 선정
+2026-04-05 23:33:44.623 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-10-01: 30종목 선정
+2026-04-05 23:33:44.651 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-11-01: 30종목 선정
+2026-04-05 23:33:44.682 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2023-12-01: 30종목 선정
+2026-04-05 23:33:44.708 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-01-01: 30종목 선정
+2026-04-05 23:33:44.741 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-02-01: 30종목 선정
+2026-04-05 23:33:44.776 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-03-01: 30종목 선정
+2026-04-05 23:33:44.802 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-04-01: 30종목 선정
+2026-04-05 23:33:44.829 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-05-01: 30종목 선정
+2026-04-05 23:33:44.855 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-06-01: 30종목 선정
+2026-04-05 23:33:44.884 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-07-01: 30종목 선정
+2026-04-05 23:33:44.910 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-08-01: 30종목 선정
+2026-04-05 23:33:44.941 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-09-01: 30종목 선정
+2026-04-05 23:33:44.970 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-10-01: 30종목 선정
+2026-04-05 23:33:44.997 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-11-01: 30종목 선정
+2026-04-05 23:33:45.024 | INFO     | __main__:_build_pool_history_from_ohlcv:131 -   2024-12-01: 30종목 선정
+2026-04-05 23:33:45.024 | INFO     | __main__:run_backtest:78 - Step 5: ML 모델 학습
+2026-04-05 23:33:45.025 | INFO     | __main__:_train_models_if_needed:170 - 기존 모델 사용: decision_tree (models\decision_tree_timing.pkl)
+2026-04-05 23:33:45.025 | INFO     | __main__:_train_models_if_needed:170 - 기존 모델 사용: xgboost (models\xgboost_timing.pkl)
+2026-04-05 23:33:45.025 | INFO     | __main__:run_backtest:82 - Step 6: 전략 비교 백테스트 실행
+2026-04-05 23:33:46.491 | INFO     | src.timing.decision_tree:load:114 - DT 모델 로드: models\decision_tree_timing.pkl
+2026-04-05 23:33:46.491 | INFO     | src.timing.predictor:__init__:21 - 타이밍 모델 로드: decision_tree (models\decision_tree_timing.pkl)
+2026-04-05 23:33:46.797 | INFO     | src.timing.predictor:__init__:21 - 타이밍 모델 로드: xgboost (models\xgboost_timing.pkl)
+2026-04-05 23:33:46.797 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_only
+2026-04-05 23:35:47.859 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_macd
+2026-04-05 23:36:58.564 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_decision_tree
+2026-04-05 23:45:50.517 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_decision_tree
+2026-04-06 00:10:55.678 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_kdj
+2026-04-06 00:34:01.989 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_xgboost
+2026-04-06 00:44:24.801 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_xgboost
+2026-04-06 00:51:49.852 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_decision_tree
+2026-04-06 01:50:46.031 | INFO     | backtest.comparison:run_strategy_comparison:89 - 
+전략 비교 결과:
+                      total_return       cagr  sharpe_ratio  sortino_ratio  max_drawdown  calmar_ratio   win_rate  profit_factor  total_trades  avg_holding_days
+strategy                                                                                                                                                        
+factor_only              93.205973  10.039497      0.394675       0.519849    -51.400244      0.195320  40.892193       1.655275         269.0        248.840149
+factor_macd              65.725837   7.614201      0.349817       0.507685    -27.116812      0.280793  34.409222       1.328344        1735.0         29.670317
+factor_kdj               55.341855   6.607413      0.252165       0.324036    -44.867940      0.147264  62.037037       2.999150         216.0        247.092593
+factor_decision_tree    124.119506  12.437767      0.567338       0.707795    -40.760211      0.305145  55.660803       1.664770        2217.0         24.968877
+factor_xgboost         3309.328731  66.971441      2.958787       4.157228    -25.423563      2.634227  69.297927       5.069248        2749.0         21.021826
+2026-04-06 01:50:46.401 | INFO     | __main__:run_backtest:89 - 백테스트 완료!
+2026-04-06 01:58:50.731 | INFO     | backtest.comparison:run_strategy_comparison:57 - 전략 실행: factor_xgboost
+2026-04-06 02:04:42.423 | INFO     | backtest.comparison:run_strategy_comparison:89 - 
+전략 비교 결과:
+                      total_return       cagr  sharpe_ratio  sortino_ratio  max_drawdown  calmar_ratio   win_rate  profit_factor  total_trades  avg_holding_days
+strategy                                                                                                                                                        
+factor_only              92.551643   9.985283      0.394119       0.518589    -50.972956      0.195894  40.823970       1.665466         267.0        248.985019
+factor_macd              65.725837   7.614201      0.349817       0.507685    -27.116812      0.280793  34.409222       1.328344        1735.0         29.670317
+factor_kdj               55.341855   6.607413      0.252165       0.324036    -44.867940      0.147264  62.037037       2.999150         216.0        247.092593
+factor_decision_tree    124.119506  12.437767      0.567338       0.707795    -40.760211      0.305145  55.660803       1.664770        2217.0         24.968877
+factor_xgboost         3309.328731  66.971441      2.958787       4.157228    -25.423563      2.634227  69.297927       5.069248        2749.0         21.021826
+2026-04-06 02:04:42.436 | INFO     | __main__:run_backtest:89 - 백테스트 완료!
+2026-04-06 03:07:41.391 | INFO     | backtest.comparison:run_strategy_comparison:89 - 
+전략 비교 결과:
+                      total_return       cagr  sharpe_ratio  sortino_ratio  max_drawdown  calmar_ratio   win_rate  profit_factor  total_trades  avg_holding_days
+strategy                                                                                                                                                        
+factor_only              85.772568   9.414138      0.368858       0.485390    -51.842889      0.181590  41.263941       1.589498         269.0        247.929368
+factor_macd              65.725837   7.614201      0.349817       0.507685    -27.116812      0.280793  34.409222       1.328344        1735.0         29.670317
+factor_kdj               55.341855   6.607413      0.252165       0.324036    -44.867940      0.147264  62.037037       2.999150         216.0        247.092593
+factor_decision_tree    124.119506  12.437767      0.567338       0.707795    -40.760211      0.305145  55.660803       1.664770        2217.0         24.968877
+factor_xgboost         3309.328731  66.971441      2.958787       4.157228    -25.423563      2.634227  69.297927       5.069248        2749.0         21.021826
+2026-04-06 03:07:41.426 | INFO     | __main__:run_backtest:89 - 백테스트 완료!
