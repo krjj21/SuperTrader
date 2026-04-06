@@ -236,6 +236,14 @@ def run_live():
     logger.info("팩터 기반 종목풀 구성 중...")
     rebalance_pool()
 
+    # LLM 시그널 검증기
+    from src.timing.llm_validator import SignalValidator
+    validator = SignalValidator()
+    if validator.is_enabled:
+        logger.info("LLM 시그널 검증 활성화 (Claude Haiku)")
+    else:
+        logger.info("LLM 시그널 검증 비활성화 — ANTHROPIC_API_KEY 미설정")
+
     notifier.notify_start()
 
     # 스케줄러
@@ -263,6 +271,15 @@ def run_live():
                 signal = strategy.generate_signal(code, df)
 
                 if signal.is_actionable:
+                    # LLM 검증: ML 시그널을 기술적 맥락에서 확인
+                    confirmed, llm_reason = validator.validate_signal(
+                        code, signal.stock_name, signal.signal.value,
+                        signal.reason, df,
+                    )
+                    if not confirmed:
+                        logger.info(f"LLM 보류: {signal.stock_name} {signal.signal.value} — {llm_reason}")
+                        continue
+
                     notifier.notify_signal(signal)
 
                     if signal.signal.value == "BUY":

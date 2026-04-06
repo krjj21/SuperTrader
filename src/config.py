@@ -23,6 +23,7 @@ class Secrets(BaseSettings):
     kis_hts_id: str = Field(default="", alias="KIS_HTS_ID")
     slack_bot_token: str = Field(default="", alias="SLACK_BOT_TOKEN")
     slack_channel: str = Field(default="#auto-trading", alias="SLACK_CHANNEL")
+    anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
 
     model_config = {"env_file": "config/.env", "extra": "ignore"}
 
