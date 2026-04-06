@@ -212,6 +212,30 @@ def run_live():
     # 전략 생성
     strategy = _create_live_strategy(config)
 
+    # 팩터 기반 종목풀 구성
+    from src.factors.stock_pool import build_stock_pool
+    _current_pool = [None]  # mutable container for closure
+
+    def rebalance_pool():
+        """팩터 기반 종목풀을 리밸런싱합니다."""
+        today = datetime.now().strftime("%Y%m%d")
+        try:
+            pool = build_stock_pool(today, previous_pool=_current_pool[0])
+            if pool.codes:
+                strategy.update_pool(pool.codes)
+                _current_pool[0] = pool
+                logger.info(f"종목풀 업데이트: {len(pool.codes)}종목 (신규 {len(pool.entered)}, 퇴출 {len(pool.exited)})")
+                notifier.notify_start()  # 종목풀 갱신 알림
+            else:
+                logger.warning("종목풀이 비어 있습니다 — 기존 풀 유지")
+        except Exception as e:
+            logger.error(f"종목풀 구성 실패: {e}")
+            notifier.notify_error(str(e), "종목풀 리밸런싱")
+
+    # 시작 시 즉시 종목풀 구성
+    logger.info("팩터 기반 종목풀 구성 중...")
+    rebalance_pool()
+
     notifier.notify_start()
 
     # 스케줄러
@@ -226,6 +250,9 @@ def run_live():
             balance = account_mgr.get_balance()
             risk_mgr.check_daily_loss_limit(balance.total_pnl, balance.total_eval)
 
+            # 보유 종목 코드 set
+            held_codes = {pos.stock_code for pos in balance.positions}
+
             # 종목풀 내 종목에 대해 시그널 체크
             for code in strategy._pool if hasattr(strategy, '_pool') else []:
                 ohlcv = client.get_daily_ohlcv(code)
@@ -239,6 +266,9 @@ def run_live():
                     notifier.notify_signal(signal)
 
                     if signal.signal.value == "BUY":
+                        # 이미 보유 중인 종목은 추가 매수하지 않음
+                        if code in held_codes:
+                            continue
                         qty = risk_mgr.calculate_position_size(
                             signal, balance.total_deposit,
                             balance.total_eval, len(balance.positions),
@@ -278,19 +308,77 @@ def run_live():
         except Exception as e:
             logger.error(f"리포트 오류: {e}")
 
+    def weekly_retrain():
+        """주간 모델 재학습 — 최신 데이터로 XGBoost를 재학습하고 성능이 개선되면 교체합니다."""
+        from src.data.market_data import get_universe, get_ohlcv_batch
+        from src.timing.retrain import retrain_model
+
+        model_type = config.strategy.name.replace("factor_", "")
+        ext = ".pkl" if model_type in ("decision_tree", "xgboost", "lightgbm") else ".pt"
+        model_path = f"models/{model_type}_timing{ext}"
+
+        logger.info(f"주간 모델 재학습 시작: {model_type}")
+        try:
+            # 최신 OHLCV 데이터 수집 (최근 2년)
+            end = datetime.now().strftime("%Y%m%d")
+            start = (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
+            universe = get_universe()
+            codes = universe["code"].tolist()[:100]
+            ohlcv_dict = get_ohlcv_batch(codes, start, end)
+
+            result = retrain_model(ohlcv_dict, model_type, model_path)
+
+            if result.get("replaced"):
+                # 모델이 교체되었으면 predictor 리로드
+                if hasattr(strategy, 'predictor'):
+                    strategy.predictor.model.load(model_path)
+                    logger.info("라이브 전략에 새 모델 반영 완료")
+
+                msg = (
+                    f"모델 재학습 완료 — 교체됨\n"
+                    f"• accuracy: {result['new_accuracy']:.3f}\n"
+                    f"• F1: {result['new_f1']:.3f}\n"
+                    f"• 학습: {result['train_samples']:,}건, 검증: {result['val_samples']:,}건\n"
+                    f"• 시그널: BUY {result['signal_dist']['buy']}, "
+                    f"SELL {result['signal_dist']['sell']}, "
+                    f"HOLD {result['signal_dist']['hold']}"
+                )
+            else:
+                msg = f"모델 재학습 완료 — 기존 모델 유지 (성능 개선 없음)"
+
+            logger.info(msg)
+            notifier._send(f"🔄 *{msg}*")
+
+        except Exception as e:
+            logger.error(f"모델 재학습 실패: {e}")
+            notifier.notify_error(str(e), "주간 모델 재학습")
+
     # 스케줄 등록
     scheduler.add_job(
         check_signals, "interval",
         seconds=config.schedule.check_interval_sec,
-        start_date=f"{datetime.now().strftime('%Y-%m-%d')} {config.schedule.market_open}",
+        start_date=f"{datetime.now().strftime('%Y-%m-%d')} {config.schedule.market_open}:00",
     )
     scheduler.add_job(
         daily_report, "cron",
         hour=int(config.schedule.post_market.split(":")[0]),
         minute=int(config.schedule.post_market.split(":")[1]),
     )
+    # 매월 리밸런싱 (장 시작 전)
+    pre_h, pre_m = config.schedule.pre_market.split(":")
+    scheduler.add_job(
+        rebalance_pool, "cron",
+        day=config.schedule.rebalance_day,
+        hour=int(pre_h), minute=int(pre_m),
+    )
 
-    logger.info(f"스케줄 시작: {config.schedule.check_interval_sec}초 간격")
+    # 매주 토요일 새벽 모델 재학습
+    scheduler.add_job(
+        weekly_retrain, "cron",
+        day_of_week="sat", hour=6, minute=0,
+    )
+
+    logger.info(f"스케줄 시작: {config.schedule.check_interval_sec}초 간격, 리밸런싱 매월 {config.schedule.rebalance_day}일, 재학습 매주 토요일")
     scheduler.start()
 
 
@@ -344,13 +432,104 @@ def run_train(model_type: str):
 
 
 # ═══════════════════════════════════════════════
+# 재학습 모드
+# ═══════════════════════════════════════════════
+def run_retrain(model_type: str):
+    """최신 데이터로 모델을 재학습하고 성능이 개선되면 교체합니다."""
+    config = get_config()
+    logger.info(f"모델 재학습: {model_type}")
+
+    from src.data.market_data import get_universe, get_ohlcv_batch
+    from src.timing.retrain import retrain_model
+
+    # 최근 2년 데이터
+    end = datetime.now().strftime("%Y%m%d")
+    start = (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
+
+    universe = get_universe()
+    codes = universe["code"].tolist()[:100]
+    ohlcv_dict = get_ohlcv_batch(codes, start, end)
+
+    ext = ".pkl" if model_type in ("decision_tree", "xgboost", "lightgbm") else ".pt"
+    model_path = f"models/{model_type}_timing{ext}"
+
+    result = retrain_model(ohlcv_dict, model_type, model_path)
+
+    if result.get("replaced"):
+        print(f"\n  모델 교체 완료!")
+        print(f"  accuracy: {result['new_accuracy']:.3f}")
+        print(f"  F1: {result['new_f1']:.3f}")
+        print(f"  학습: {result['train_samples']:,}건, 검증: {result['val_samples']:,}건")
+        dist = result['signal_dist']
+        print(f"  시그널 분포: BUY {dist['buy']}, SELL {dist['sell']}, HOLD {dist['hold']}")
+    else:
+        print(f"\n  기존 모델 유지 (성능 개선 없음)")
+        if "new_accuracy" in result:
+            print(f"  새 모델 accuracy: {result['new_accuracy']:.3f}, F1: {result['new_f1']:.3f}")
+    print()
+
+
+# ═══════════════════════════════════════════════
+# 계좌 현황 조회
+# ═══════════════════════════════════════════════
+def run_status():
+    """모의투자 계좌 현황을 간편하게 출력합니다."""
+    config = get_config()
+
+    from src.broker.kis_client import KISClient
+    from src.broker.account import AccountManager
+
+    print()
+    env_label = "🏦 모의투자" if config.kis.is_virtual else "🏦 실전투자"
+    print(f"  {env_label} 계좌 현황")
+    print(f"  {'─' * 50}")
+
+    try:
+        client = KISClient()
+        account_mgr = AccountManager(client)
+        summary = account_mgr.get_balance()
+    except Exception as e:
+        print(f"  ❌ 계좌 조회 실패: {e}")
+        return
+
+    pnl_sign = "+" if summary.total_pnl >= 0 else ""
+    pnl_color = "\033[91m" if summary.total_pnl < 0 else "\033[92m"
+    reset = "\033[0m"
+
+    print(f"  총 평가금액  : {summary.total_eval:>15,}원")
+    print(f"  예수금       : {summary.total_deposit:>15,}원")
+    print(f"  평가손익     : {pnl_color}{pnl_sign}{summary.total_pnl:>14,}원 ({pnl_sign}{summary.total_pnl_pct:.2f}%){reset}")
+    print(f"  보유 종목    : {len(summary.positions)}개")
+    print()
+
+    if summary.positions:
+        # 헤더
+        print(f"  {'종목명':<12} {'수량':>6} {'평균가':>10} {'현재가':>10} {'손익':>12} {'수익률':>8}")
+        print(f"  {'─' * 62}")
+
+        for pos in summary.positions:
+            ps = "+" if pos.pnl >= 0 else ""
+            pc = "\033[91m" if pos.pnl < 0 else "\033[92m"
+            print(
+                f"  {pos.stock_name:<12} {pos.quantity:>5}주 "
+                f"{pos.avg_price:>9,}  {pos.current_price:>9,}  "
+                f"{pc}{ps}{pos.pnl:>10,}  {ps}{pos.pnl_pct:>6.1f}%{reset}"
+            )
+
+        print()
+    else:
+        print("  보유 종목 없음")
+        print()
+
+
+# ═══════════════════════════════════════════════
 # CLI
 # ═══════════════════════════════════════════════
 def main():
     parser = argparse.ArgumentParser(description="SuperTrader - Factor + ML Timing Trading System")
     parser.add_argument(
-        "mode", choices=["backtest", "live", "train"],
-        help="실행 모드: backtest(백테스트), live(실매매), train(모델학습)",
+        "mode", choices=["backtest", "live", "train", "retrain", "status"],
+        help="실행 모드: backtest(백테스트), live(실매매), train(모델학습), retrain(재학습), status(계좌현황)",
     )
     parser.add_argument(
         "--model", type=str, default="xgboost",
@@ -374,6 +553,10 @@ def main():
         run_live()
     elif args.mode == "train":
         run_train(args.model)
+    elif args.mode == "retrain":
+        run_retrain(args.model)
+    elif args.mode == "status":
+        run_status()
 
 
 if __name__ == "__main__":

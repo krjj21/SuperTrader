@@ -80,7 +80,7 @@ timing:
 
 # ── 전략 파라미터 ──
 strategy:
-  name: "factor_xgb"
+  name: "factor_xgboost"
   params:
     rsi_period: 14
     macd_fast: 12
