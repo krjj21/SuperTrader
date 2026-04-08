@@ -1,0 +1,552 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SuperTrader Dashboard</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, 'Segoe UI', sans-serif;
+            background: #0f1117;
+            color: #e1e4e8;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+        .header h1 {
+            font-size: 24px;
+            font-weight: 700;
+            color: #fff;
+        }
+        .header h1 span { color: #58a6ff; }
+        .timestamp {
+            font-size: 13px;
+            color: #8b949e;
+        }
+        .status-dot {
+            display: inline-block;
+            width: 8px; height: 8px;
+            border-radius: 50%;
+            background: #3fb950;
+            margin-right: 6px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.4; }
+        }
+
+        /* Summary Cards */
+        .cards {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 24px;
+        }
+        .card {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 20px;
+        }
+        .card-label {
+            font-size: 12px;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        .card-value {
+            font-size: 28px;
+            font-weight: 700;
+        }
+        .card-sub {
+            font-size: 14px;
+            margin-top: 4px;
+        }
+        .positive { color: #3fb950; }
+        .negative { color: #f85149; }
+        .neutral { color: #8b949e; }
+
+        /* Table */
+        .table-wrap {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .table-header {
+            padding: 16px 20px;
+            border-bottom: 1px solid #30363d;
+            font-size: 16px;
+            font-weight: 600;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th {
+            text-align: left;
+            padding: 12px 20px;
+            font-size: 12px;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #30363d;
+        }
+        th:nth-child(n+3) { text-align: right; }
+        td {
+            padding: 14px 20px;
+            font-size: 14px;
+            border-bottom: 1px solid #21262d;
+        }
+        td:nth-child(n+3) { text-align: right; font-variant-numeric: tabular-nums; }
+        tr:last-child td { border-bottom: none; }
+        tr:hover { background: #1c2128; }
+        .stock-name {
+            font-weight: 600;
+            color: #fff;
+        }
+        .stock-code {
+            font-size: 12px;
+            color: #8b949e;
+            margin-left: 6px;
+        }
+        .pnl-bar {
+            display: inline-block;
+            height: 6px;
+            border-radius: 3px;
+            min-width: 4px;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+
+        /* Loading */
+        .loading {
+            text-align: center;
+            padding: 60px;
+            color: #8b949e;
+        }
+        .error-msg {
+            text-align: center;
+            padding: 40px;
+            color: #f85149;
+        }
+
+        /* Pipeline */
+        .pipeline-wrap { padding: 20px; }
+        .pipeline-flow {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        .pipe-step {
+            background: #21262d;
+            border: 2px solid #30363d;
+            border-radius: 10px;
+            padding: 14px 18px;
+            text-align: center;
+            min-width: 130px;
+            transition: all 0.3s;
+        }
+        .pipe-step.active { border-color: #3fb950; }
+        .pipe-step.warning { border-color: #d29922; }
+        .pipe-step.error { border-color: #f85149; }
+        .pipe-step .pipe-icon { font-size: 22px; margin-bottom: 4px; }
+        .pipe-step .pipe-label { font-size: 12px; color: #8b949e; }
+        .pipe-step .pipe-value { font-size: 14px; font-weight: 600; margin-top: 2px; }
+        .pipe-arrow { color: #484f58; font-size: 20px; }
+        .pipe-meta {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-top: 16px;
+            font-size: 13px;
+            color: #8b949e;
+        }
+        .pipe-meta span { display: flex; align-items: center; gap: 4px; }
+        .dot-green { color: #3fb950; }
+        .dot-red { color: #f85149; }
+        .dot-yellow { color: #d29922; }
+
+        /* Signal Log */
+        .signal-buy { color: #3fb950; font-weight: 600; }
+        .signal-sell { color: #f85149; font-weight: 600; }
+        .signal-hold { color: #8b949e; }
+        .decision-confirmed { color: #3fb950; }
+        .decision-rejected { color: #d29922; }
+        .signal-reason { font-size: 12px; color: #8b949e; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        /* Chart Modal */
+        .chart-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.7);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .chart-modal-content {
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 12px;
+            padding: 24px;
+            width: 90%;
+            max-width: 800px;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .chart-modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .chart-close {
+            cursor: pointer;
+            font-size: 28px;
+            color: #8b949e;
+            line-height: 1;
+        }
+        .chart-close:hover { color: #fff; }
+
+        /* Clickable row */
+        tr.clickable { cursor: pointer; }
+        tr.clickable:hover { background: #1f2937; }
+
+        /* Footer */
+        .footer {
+            text-align: center;
+            margin-top: 24px;
+            font-size: 12px;
+            color: #484f58;
+        }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <div class="header">
+        <h1><span>Super</span>Trader</h1>
+        <div class="timestamp">
+            <span class="status-dot"></span>
+            <span id="ts">Loading...</span>
+            <span style="margin-left:8px;color:#484f58;">30s auto-refresh</span>
+        </div>
+    </div>
+
+    <div class="cards" id="cards">
+        <div class="loading">Loading...</div>
+    </div>
+
+    <!-- Pipeline Flow -->
+    <div class="table-wrap" style="margin-bottom:24px;">
+        <div class="table-header">Algorithm Pipeline</div>
+        <div id="pipeline" class="pipeline-wrap">
+            <div class="loading">Loading...</div>
+        </div>
+    </div>
+
+    <!-- Holdings -->
+    <div class="table-wrap" style="margin-bottom:24px;">
+        <div class="table-header">Holdings</div>
+        <div id="table-body">
+            <div class="loading">Loading...</div>
+        </div>
+    </div>
+
+    <!-- Signal Log -->
+    <div class="table-wrap" style="margin-bottom:24px;">
+        <div class="table-header">Recent Signals (RL + LLM Validation)</div>
+        <div id="signal-log">
+            <div class="loading">Loading...</div>
+        </div>
+    </div>
+
+    <!-- Chart Modal -->
+    <div id="chart-modal" class="chart-modal" style="display:none;">
+        <div class="chart-modal-content">
+            <div class="chart-modal-header">
+                <span id="chart-title">Technical Indicators</span>
+                <span class="chart-close" onclick="closeChart()">&times;</span>
+            </div>
+            <canvas id="priceChart" height="200"></canvas>
+            <canvas id="rsiChart" height="80"></canvas>
+            <canvas id="macdChart" height="80"></canvas>
+        </div>
+    </div>
+
+    <div class="footer">SuperTrader Dashboard &mdash; Factor + GRPO RL + LLM Trading System</div>
+
+    <script>
+        function fmt(n) {
+            return new Intl.NumberFormat('ko-KR').format(n);
+        }
+
+        function pctClass(v) {
+            return v > 0 ? 'positive' : v < 0 ? 'negative' : 'neutral';
+        }
+
+        function pctSign(v) {
+            return v > 0 ? '+' + v.toFixed(2) + '%' : v.toFixed(2) + '%';
+        }
+
+        function pnlSign(v) {
+            return v > 0 ? '+' + fmt(v) : fmt(v);
+        }
+
+        function renderCards(s) {
+            return `
+                <div class="card">
+                    <div class="card-label">Total Value</div>
+                    <div class="card-value">${fmt(s.total_eval)}</div>
+                    <div class="card-sub neutral">Initial: ${fmt(s.initial_capital)}</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Total Return</div>
+                    <div class="card-value ${pctClass(s.total_return_pct)}">${pctSign(s.total_return_pct)}</div>
+                    <div class="card-sub ${pctClass(s.total_pnl)}">${pnlSign(s.total_pnl)} won</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Deposit</div>
+                    <div class="card-value">${fmt(s.total_deposit)}</div>
+                    <div class="card-sub neutral">Available cash</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Holdings</div>
+                    <div class="card-value">${s.num_positions}</div>
+                    <div class="card-sub neutral">Invested: ${fmt(s.total_invested)}</div>
+                </div>
+            `;
+        }
+
+        async function refresh() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+                if (!data.ok) {
+                    document.getElementById('table-body').innerHTML =
+                        `<div class="error-msg">${data.error}</div>`;
+                    return;
+                }
+                document.getElementById('ts').textContent = data.timestamp;
+                document.getElementById('cards').innerHTML = renderCards(data.summary);
+                document.getElementById('table-body').innerHTML = renderTable(data.positions);
+            } catch (e) {
+                document.getElementById('table-body').innerHTML =
+                    `<div class="error-msg">Connection error: ${e.message}</div>`;
+            }
+        }
+
+        // ── Pipeline ──
+        function renderPipeline(p) {
+            const ks = p.kill_switch;
+            return `
+            <div class="pipeline-flow">
+                <div class="pipe-step active">
+                    <div class="pipe-icon">📊</div>
+                    <div class="pipe-label">Factor Pool</div>
+                    <div class="pipe-value">${p.pool_size} stocks</div>
+                </div>
+                <div class="pipe-arrow">→</div>
+                <div class="pipe-step active">
+                    <div class="pipe-icon">🤖</div>
+                    <div class="pipe-label">GRPO RL</div>
+                    <div class="pipe-value">${p.strategy}</div>
+                </div>
+                <div class="pipe-arrow">→</div>
+                <div class="pipe-step ${p.llm_enabled ? 'active' : 'warning'}">
+                    <div class="pipe-icon">🧠</div>
+                    <div class="pipe-label">LLM Validation</div>
+                    <div class="pipe-value">${p.llm_enabled ? 'Claude Haiku' : 'Disabled'}</div>
+                </div>
+                <div class="pipe-arrow">→</div>
+                <div class="pipe-step ${ks ? 'error' : 'active'}">
+                    <div class="pipe-icon">${ks ? '🚨' : '🛡️'}</div>
+                    <div class="pipe-label">Risk Manager</div>
+                    <div class="pipe-value">${ks ? 'KILL SWITCH' : 'Active'}</div>
+                </div>
+                <div class="pipe-arrow">→</div>
+                <div class="pipe-step ${ks ? 'error' : 'active'}">
+                    <div class="pipe-icon">${ks ? '⏸️' : '✅'}</div>
+                    <div class="pipe-label">Order Execution</div>
+                    <div class="pipe-value">${ks ? 'Paused' : 'Ready'}</div>
+                </div>
+            </div>
+            <div class="pipe-meta">
+                <span>Check: every ${p.check_interval}s</span>
+                <span>Loss limit: ${p.daily_loss_limit}%</span>
+                <span>Max positions: ${p.max_positions}</span>
+            </div>`;
+        }
+
+        async function refreshPipeline() {
+            try {
+                const res = await fetch('/api/pipeline');
+                const data = await res.json();
+                if (data.ok) {
+                    document.getElementById('pipeline').innerHTML = renderPipeline(data);
+                }
+            } catch (e) {}
+        }
+
+        // ── Signal Log ──
+        function renderSignals(signals) {
+            if (!signals.length) return '<div class="loading">No signals yet</div>';
+            let rows = signals.map(s => {
+                const sigCls = s.signal === 'BUY' ? 'signal-buy' : s.signal === 'SELL' ? 'signal-sell' : 'signal-hold';
+                const decCls = s.decision === '확정' ? 'decision-confirmed' : 'decision-rejected';
+                return `<tr>
+                    <td>${s.time}</td>
+                    <td>${s.stock}</td>
+                    <td class="${sigCls}">${s.signal}</td>
+                    <td class="${decCls}">${s.decision}</td>
+                    <td class="signal-reason" title="${s.reason}">${s.reason}</td>
+                </tr>`;
+            }).join('');
+            return `<table>
+                <thead><tr>
+                    <th>Time</th><th>Stock</th><th>Signal</th><th>Decision</th><th>Reason</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+        }
+
+        async function refreshSignals() {
+            try {
+                const res = await fetch('/api/signals');
+                const data = await res.json();
+                if (data.ok) {
+                    document.getElementById('signal-log').innerHTML = renderSignals(data.signals);
+                }
+            } catch (e) {}
+        }
+
+        // ── Chart ──
+        let priceChartObj = null, rsiChartObj = null, macdChartObj = null;
+
+        function closeChart() {
+            document.getElementById('chart-modal').style.display = 'none';
+        }
+
+        async function showChart(code, name) {
+            document.getElementById('chart-modal').style.display = 'flex';
+            document.getElementById('chart-title').textContent = `${name} (${code})`;
+
+            try {
+                const res = await fetch(`/api/indicators/${code}`);
+                const d = await res.json();
+                if (!d.ok) return;
+
+                const labels = d.dates.map(s => s.slice(5));
+
+                // Price + MA
+                if (priceChartObj) priceChartObj.destroy();
+                priceChartObj = new Chart(document.getElementById('priceChart'), {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [
+                            {label:'Close', data:d.close, borderColor:'#58a6ff', borderWidth:2, pointRadius:0},
+                            {label:'MA5', data:d.ma5, borderColor:'#3fb950', borderWidth:1, pointRadius:0, borderDash:[3,3]},
+                            {label:'MA20', data:d.ma20, borderColor:'#d29922', borderWidth:1, pointRadius:0, borderDash:[3,3]},
+                            {label:'MA60', data:d.ma60, borderColor:'#f85149', borderWidth:1, pointRadius:0, borderDash:[5,5]},
+                        ]
+                    },
+                    options: {
+                        responsive:true, plugins:{legend:{labels:{color:'#8b949e',font:{size:11}}}},
+                        scales:{x:{ticks:{color:'#484f58',maxTicksLimit:10}},y:{ticks:{color:'#484f58'}}}
+                    }
+                });
+
+                // RSI
+                if (rsiChartObj) rsiChartObj.destroy();
+                rsiChartObj = new Chart(document.getElementById('rsiChart'), {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [{label:'RSI', data:d.rsi, borderColor:'#bc8cff', borderWidth:1.5, pointRadius:0, fill:false}]
+                    },
+                    options: {
+                        responsive:true, plugins:{legend:{labels:{color:'#8b949e',font:{size:11}}}},
+                        scales:{
+                            x:{ticks:{color:'#484f58',maxTicksLimit:10}},
+                            y:{min:0,max:100,ticks:{color:'#484f58',stepSize:20}}
+                        },
+                        annotation: {}
+                    }
+                });
+
+                // MACD
+                if (macdChartObj) macdChartObj.destroy();
+                macdChartObj = new Chart(document.getElementById('macdChart'), {
+                    type: 'bar',
+                    data: {
+                        labels,
+                        datasets: [
+                            {type:'line', label:'MACD', data:d.macd, borderColor:'#58a6ff', borderWidth:1.5, pointRadius:0},
+                            {type:'line', label:'Signal', data:d.macd_signal, borderColor:'#f85149', borderWidth:1, pointRadius:0, borderDash:[3,3]},
+                            {label:'Histogram', data:d.macd_hist, backgroundColor:d.macd_hist.map(v=>v>=0?'rgba(63,185,80,0.5)':'rgba(248,81,73,0.5)')},
+                        ]
+                    },
+                    options: {
+                        responsive:true, plugins:{legend:{labels:{color:'#8b949e',font:{size:11}}}},
+                        scales:{x:{ticks:{color:'#484f58',maxTicksLimit:10}},y:{ticks:{color:'#484f58'}}}
+                    }
+                });
+            } catch (e) {}
+        }
+
+        // Make holdings table rows clickable
+        function renderTable(positions) {
+            if (!positions.length) return '<div class="loading">No holdings</div>';
+            const maxPnl = Math.max(...positions.map(p => Math.abs(p.pnl_pct)), 1);
+            let rows = positions.map(p => {
+                const cls = pctClass(p.pnl_pct);
+                const barW = Math.min(Math.abs(p.pnl_pct) / maxPnl * 60, 60);
+                const barColor = p.pnl_pct >= 0 ? '#3fb950' : '#f85149';
+                return `
+                <tr class="clickable" onclick="showChart('${p.code}','${p.name}')">
+                    <td>
+                        <span class="stock-name">${p.name}</span>
+                        <span class="stock-code">${p.code}</span>
+                    </td>
+                    <td>${fmt(p.quantity)}</td>
+                    <td>${fmt(p.avg_price)}</td>
+                    <td>${fmt(p.current_price)}</td>
+                    <td>${fmt(p.eval_amount)}</td>
+                    <td class="${cls}">${pnlSign(p.pnl)}</td>
+                    <td class="${cls}">
+                        <span class="pnl-bar" style="width:${barW}px;background:${barColor}"></span>
+                        ${pctSign(p.pnl_pct)}
+                    </td>
+                </tr>`;
+            }).join('');
+            return `
+            <table>
+                <thead><tr>
+                    <th>Stock</th><th>Qty</th><th>Avg Price</th><th>Current</th><th>Value</th><th>P&L</th><th>Return</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>`;
+        }
+
+        refresh();
+        refreshPipeline();
+        refreshSignals();
+        setInterval(refresh, 30000);
+        setInterval(refreshPipeline, 30000);
+        setInterval(refreshSignals, 30000);
+    </script>
+</body>
+</html>

@@ -20,6 +20,7 @@ class RiskManager:
 
     def __init__(self, account: AccountManager | None = None):
         self.config = get_config().risk
+        self._schedule = get_config().schedule
         self.account = account or AccountManager()
         self._daily_pnl: float = 0.0
         self._daily_date: str = ""
@@ -28,10 +29,25 @@ class RiskManager:
 
     @property
     def is_trading_allowed(self) -> bool:
-        """매매가 허용되는지 확인합니다."""
+        """매매가 허용되는지 확인합니다 (kill switch + 장 운영 시간)."""
         if self._kill_switch:
             logger.warning("🚨 Kill switch 활성화 - 매매 중지")
             return False
+
+        now = datetime.now()
+        market_open = datetime.strptime(self._schedule.market_open, "%H:%M").time()
+        market_close = datetime.strptime(self._schedule.market_close, "%H:%M").time()
+        current_time = now.time()
+
+        if current_time < market_open or current_time > market_close:
+            logger.debug(f"장 운영 시간 외: {current_time} (운영: {market_open}~{market_close})")
+            return False
+
+        # 주말 체크 (토=5, 일=6)
+        if now.weekday() >= 5:
+            logger.debug("주말 — 매매 중지")
+            return False
+
         return True
 
     def activate_kill_switch(self, reason: str = "") -> None:

@@ -12,7 +12,7 @@ python main.py backtest
 python main.py live
 
 # Train a specific ML timing model
-python main.py train --model xgboost          # options: decision_tree, xgboost, lightgbm, lstm, transformer
+python main.py train --model xgboost          # options: decision_tree, xgboost, lightgbm, lstm, transformer, rl
 
 # Retrain model with latest data (replaces only if new model is better)
 python main.py retrain --model xgboost
@@ -80,6 +80,7 @@ All strategies inherit `BaseStrategy` (in `base.py`) and implement `generate_sig
 - **FactorMACDStrategy**: MACD golden/death cross signals with RSI confirmation.
 - **FactorKDJStrategy**: KDJ overbought/oversold + J-line crossover signals.
 - **FactorMLStrategy**: Wraps any ML model via `TimingPredictor`. Loads model by type string + path.
+- **FactorRLStrategy**: GRPO (Group Relative Policy Optimization) RL agent. Critic-free, group advantage 기반. `.pt` 파일.
 
 `Signal` enum: `BUY`, `SELL`, `HOLD`. `TradeSignal` dataclass includes strength (0-1), reason, stop_loss, take_profit.
 
@@ -92,6 +93,9 @@ All strategies inherit `BaseStrategy` (in `base.py`) and implement `generate_sig
 - **retrain.py**: Auto-retraining — trains new model, compares F1/accuracy against existing, replaces only if improved, backs up old model
 - **llm_validator.py**: LLM signal validation — sends ML signal + technical context to Claude Haiku, confirms or rejects based on RSI/MA/volume analysis
 - Model implementations: `decision_tree.py`, `gradient_boost.py` (XGBoost/LightGBM), `lstm_model.py`, `transformer_model.py`
+- **rl_env.py**: Trading Gym environment — State(40 features + 3 position) / Action(BUY/HOLD/SELL) / Reward(return - cost - drawdown penalty)
+- **rl_agent.py**: GRPO Actor network + group sampling + decoupled clipping. Compatible with existing model interface (train/predict/save/load)
+- **rl_trainer.py**: Multi-stock episode training, walk-forward validation, Sharpe-based model selection
 
 sklearn models save as `.pkl`, torch models as `.pt`.
 
@@ -125,6 +129,19 @@ Secrets (KIS API keys, Slack token, Anthropic API key) loaded from `config/.env`
 
 In live mode, `build_stock_pool()` runs at startup and monthly via APScheduler cron job (rebalance_day in config).
 
+### Database (`src/db/`)
+
+SQLAlchemy ORM with SQLite. `init_db(path)` creates tables. Models: `TradeLog`, `DailyPnL`, `Position`. `save_daily_pnl()` records daily P&L snapshots for historical tracking.
+
+### Web Dashboard (`web/`)
+
+Flask app (`web/app.py`) for real-time account monitoring. Run separately from main process. Auto-refreshes every 30 seconds. Uses `config/settings.yaml` for KIS credentials.
+
+```bash
+# Run dashboard (from project root)
+/mnt/e/SuperTrader/venv/Scripts/python.exe web/app.py
+```
+
 ### Live Trading (`src/broker/`, `src/risk/`, `src/notification/`)
 
 - **kis_client.py**: Korean Investment & Securities REST API (supports virtual/real via `is_virtual` config). Rate limited to 10 calls/sec with auto-retry.
@@ -145,3 +162,9 @@ In live mode, `build_stock_pool()` runs at startup and monthly via APScheduler c
 - LLM validation gates all BUY/SELL signals; falls back to ML-only if API key missing or API error
 - Model retraining only replaces if F1 improves by >0.5%p; old model auto-backed up
 - Terminal encoding issues with Korean stock names in WSL — use stock code for reliable identification
+
+### Environment Gotchas
+
+- **WSL + Windows venv**: The project uses a Windows Python venv from WSL. Always use `/mnt/e/SuperTrader/venv/Scripts/python.exe`, not a Linux python.
+- **Missing from requirements.txt**: `anthropic` (for LLM validator) and `flask` (for web dashboard) are used but not listed in `requirements.txt`. Install separately if needed.
+- **Trained models in `models/`**: `.pkl` (sklearn) and `.pt` (torch) files. Not checked into git — must be trained locally via `python main.py train`.

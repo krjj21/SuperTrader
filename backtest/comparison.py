@@ -50,6 +50,13 @@ def run_strategy_comparison(
                 model_path=model_paths[model_type],
             )
 
+    # RL 모델이 있으면 추가
+    if "rl" in model_paths:
+        from src.strategy.factor_rl import FactorRLStrategy
+        strategies["factor_rl"] = FactorRLStrategy(
+            model_path=model_paths["rl"],
+        )
+
     results = {}
     equity_curves = {}
 

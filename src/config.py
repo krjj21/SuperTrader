@@ -100,6 +100,18 @@ class TransformerParams(BaseModel):
     batch_size: int = 64
 
 
+class RLParams(BaseModel):
+    learning_rate: float = 0.0003
+    gamma: float = 0.99
+    group_size: int = 8
+    clip_epsilon_low: float = 0.2
+    clip_epsilon_high: float = 0.28
+    entropy_coeff: float = 0.01
+    epochs_per_update: int = 4
+    episodes: int = 50
+    hidden_dim: int = 256
+
+
 class TimingConfig(BaseModel):
     model: str = "xgboost"
     forward_days: int = 5
@@ -111,6 +123,7 @@ class TimingConfig(BaseModel):
     gradient_boost: GBParams = GBParams()
     lstm: LSTMParams = LSTMParams()
     transformer: TransformerParams = TransformerParams()
+    rl: RLParams = RLParams()
 
 
 class StrategyParams(BaseModel):

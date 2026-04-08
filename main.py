@@ -159,7 +159,7 @@ def _train_models_if_needed(ohlcv_dict: dict) -> dict[str, str]:
     model_dir.mkdir(exist_ok=True)
 
     model_paths = {}
-    models_to_train = ["decision_tree", "xgboost"]  # 기본적으로 DT, XGB 학습
+    models_to_train = ["decision_tree", "xgboost", "rl"]  # DT, XGB, RL 학습
 
     for model_type in models_to_train:
         ext = ".pkl" if model_type in ("decision_tree", "xgboost", "lightgbm") else ".pt"
@@ -312,16 +312,30 @@ def run_live():
             notifier.notify_error(str(e))
 
     def daily_report():
-        """일일 리포트"""
+        """일일 리포트 + LLM 피드백"""
         try:
             balance = account_mgr.get_balance()
             notifier.notify_daily_report(balance)
-            from src.db.models import save_daily_pnl
+            from src.db.models import save_daily_pnl, get_today_trades
             save_daily_pnl(
                 balance.total_eval, balance.total_deposit,
                 balance.total_pnl, balance.total_pnl_pct,
                 len(balance.positions),
             )
+
+            # LLM 일일 매매 피드백
+            today_trades = get_today_trades()
+            feedback = validator.generate_daily_feedback(
+                trades=today_trades,
+                positions=balance.positions,
+                total_pnl=balance.total_pnl,
+                total_pnl_pct=balance.total_pnl_pct,
+                total_eval=balance.total_eval,
+            )
+            if feedback:
+                notifier.notify_daily_feedback(feedback)
+                logger.info(f"일일 피드백 전송 완료")
+
         except Exception as e:
             logger.error(f"리포트 오류: {e}")
 
@@ -412,6 +426,10 @@ def _create_live_strategy(config):
     elif strategy_name == "factor_kdj":
         from src.strategy.factor_kdj import FactorKDJStrategy
         return FactorKDJStrategy(params=config.strategy.params.model_dump())
+    elif strategy_name == "factor_rl":
+        model_path = "models/rl_timing.pt"
+        from src.strategy.factor_rl import FactorRLStrategy
+        return FactorRLStrategy(model_path, config.strategy.params.model_dump())
     elif strategy_name.startswith("factor_"):
         model_type = strategy_name.replace("factor_", "")
         ext = ".pkl" if model_type in ("decision_tree", "xgboost", "lightgbm") else ".pt"
@@ -550,7 +568,7 @@ def main():
     )
     parser.add_argument(
         "--model", type=str, default="xgboost",
-        choices=["decision_tree", "xgboost", "lightgbm", "lstm", "transformer"],
+        choices=["decision_tree", "xgboost", "lightgbm", "lstm", "transformer", "rl"],
         help="학습할 모델 타입 (train 모드용)",
     )
     parser.add_argument(

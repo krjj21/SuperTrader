@@ -33,6 +33,24 @@ class TimingPredictor:
         predictions = self.model.predict(features)
         return int(predictions.iloc[-1])
 
+    def predict_with_position(
+        self,
+        df: pd.DataFrame,
+        holding: bool = False,
+        unrealized_pnl: float = 0.0,
+        holding_days: int = 0,
+    ) -> int:
+        """포지션 상태를 반영한 예측 (RL 모델용).
+
+        비-RL 모델은 포지션 무시하고 일반 predict() 사용.
+        """
+        if hasattr(self.model, "predict_with_position"):
+            features = build_features(df)
+            return self.model.predict_with_position(
+                features, holding, unrealized_pnl, holding_days,
+            )
+        return self.predict(df)
+
     def predict_batch(self, ohlcv_dict: dict[str, pd.DataFrame]) -> dict[str, int]:
         """여러 종목의 타이밍 시그널을 배치 예측합니다.
 

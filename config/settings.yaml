@@ -78,9 +78,21 @@ timing:
     epochs: 100
     batch_size: 64
 
+  # GRPO RL
+  rl:
+    learning_rate: 0.0003
+    gamma: 0.99
+    group_size: 8
+    clip_epsilon_low: 0.2
+    clip_epsilon_high: 0.28
+    entropy_coeff: 0.01
+    epochs_per_update: 4
+    episodes: 50
+    hidden_dim: 256
+
 # ── 전략 파라미터 ──
 strategy:
-  name: "factor_xgboost"
+  name: "factor_rl"
   params:
     rsi_period: 14
     macd_fast: 12
@@ -95,7 +107,7 @@ strategy:
 risk:
   max_position_pct: 0.05          # 종목당 최대 5%
   max_total_positions: 30         # 최대 30종목
-  daily_loss_limit_pct: 0.03      # 일일 손실 한도 3%
+  daily_loss_limit_pct: 0.05      # 일일 손실 한도 5%
   stop_loss_pct: 0.07             # 개별 손절 7%
   max_order_retries: 3
 

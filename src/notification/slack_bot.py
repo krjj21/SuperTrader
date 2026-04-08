@@ -156,3 +156,8 @@ class SlackNotifier:
 
         text = "\n".join(lines)
         return self._send(text)
+
+    def notify_daily_feedback(self, feedback: str) -> bool:
+        """LLM 일일 매매 피드백 전송"""
+        text = f"🤖 *AI 일일 매매 피드백*\n\n{feedback}"
+        return self._send(text)

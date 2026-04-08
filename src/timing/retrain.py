@@ -70,6 +70,10 @@ def retrain_model(
     """
     config = get_config().timing
 
+    # RL 모델은 별도 재학습 로직 (Sharpe ratio 기반 비교)
+    if model_type == "rl":
+        return _retrain_rl_model(ohlcv_dict, current_model_path, val_ratio)
+
     # 1. 전 종목 피처 + 라벨 통합
     all_features = []
     all_labels = []
@@ -181,4 +185,73 @@ def retrain_model(
             "sell": new_eval["n_sell"],
             "hold": new_eval["n_hold"],
         },
+    }
+
+
+def _retrain_rl_model(
+    ohlcv_dict: dict[str, pd.DataFrame],
+    current_model_path: str,
+    val_ratio: float,
+) -> dict:
+    """RL 모델 재학습 — Sharpe ratio 기반 비교."""
+    from src.timing.rl_trainer import train_rl_model, evaluate_rl_agent
+    from src.timing.rl_agent import RLTimingModel
+
+    current_path = Path(current_model_path)
+
+    # 1. 새 모델 학습 (임시 경로)
+    tmp_path = str(current_path.with_suffix(".tmp.pt"))
+    result = train_rl_model(ohlcv_dict, save_path=tmp_path, val_ratio=val_ratio)
+
+    if "error" in result:
+        return {"error": result["error"], "replaced": False}
+
+    new_sharpe = result.get("sharpe", -999.0)
+    logger.info(f"새 RL 모델 Sharpe: {new_sharpe:.3f}")
+
+    # 2. 기존 모델과 비교
+    replaced = False
+
+    if current_path.exists():
+        old_agent = RLTimingModel()
+        old_agent.load(str(current_path))
+
+        # 검증용 데이터 분할
+        val_dict = {}
+        for code, df in ohlcv_dict.items():
+            if len(df) < 100:
+                continue
+            split_idx = int(len(df) * (1 - val_ratio))
+            val_dict[code] = df.iloc[split_idx:].reset_index(drop=True)
+
+        old_metrics = evaluate_rl_agent(old_agent, val_dict)
+        old_sharpe = old_metrics["sharpe"]
+        logger.info(f"기존 RL 모델 Sharpe: {old_sharpe:.3f}")
+
+        if new_sharpe > old_sharpe + 0.05:  # Sharpe 0.05 이상 개선
+            backup_path = current_path.with_suffix(
+                f".backup_{datetime.now():%Y%m%d_%H%M}.pt"
+            )
+            shutil.copy2(current_path, backup_path)
+            shutil.move(tmp_path, str(current_path))
+            replaced = True
+            logger.info(f"RL 모델 교체: Sharpe {old_sharpe:.3f} → {new_sharpe:.3f}")
+        else:
+            Path(tmp_path).unlink(missing_ok=True)
+            logger.info("RL 모델 유지: Sharpe 개선 부족")
+    else:
+        # 기존 모델 없으면 바로 저장
+        current_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(tmp_path, str(current_path))
+        replaced = True
+        logger.info(f"신규 RL 모델 저장: {current_path}")
+
+    return {
+        "replaced": replaced,
+        "new_accuracy": result.get("win_rate", 0.0) / 100,
+        "new_f1": new_sharpe,  # RL은 Sharpe를 F1 자리에 표시
+        "train_samples": result.get("n_samples", 0),
+        "val_samples": result.get("n_episodes", 0),
+        "signal_dist": {"buy": 0, "sell": 0, "hold": 0},
+        "sharpe": new_sharpe,
     }

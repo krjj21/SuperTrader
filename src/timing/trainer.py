@@ -59,6 +59,19 @@ def create_model(model_type: str, config=None):
             epochs=config.transformer.epochs,
             batch_size=config.transformer.batch_size,
         )
+    elif model_type == "rl":
+        from src.timing.rl_agent import RLTimingModel
+        return RLTimingModel(
+            state_dim=43,  # 환경 reset 시 실제 dim으로 재설정됨
+            hidden_dim=config.rl.hidden_dim,
+            learning_rate=config.rl.learning_rate,
+            gamma=config.rl.gamma,
+            group_size=config.rl.group_size,
+            clip_epsilon_low=config.rl.clip_epsilon_low,
+            clip_epsilon_high=config.rl.clip_epsilon_high,
+            entropy_coeff=config.rl.entropy_coeff,
+            epochs_per_update=config.rl.epochs_per_update,
+        )
     else:
         raise ValueError(f"지원하지 않는 모델: {model_type}")
 
@@ -81,6 +94,11 @@ def train_timing_model(
         학습 결과 딕셔너리
     """
     config = get_config().timing
+
+    # RL 모델은 별도 학습 파이프라인 사용
+    if model_type == "rl":
+        from src.timing.rl_trainer import train_rl_model
+        return train_rl_model(ohlcv_dict, save_path=save_path or "models/rl_timing.pt")
 
     # 전 종목 피처 + 라벨 통합
     all_features = []
