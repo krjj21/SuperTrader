@@ -111,6 +111,17 @@ class SlackNotifier:
             text += f"\n• 컨텍스트: {context}"
         return self._send(text)
 
+    def notify_stop_loss(self, position) -> bool:
+        """손절 매도 알림"""
+        text = (
+            f"🛑 *손절 매도* | {position.stock_name} ({position.stock_code})\n"
+            f"• 손익률: {position.pnl_pct:.2f}%\n"
+            f"• 손익: {position.pnl:,}원\n"
+            f"• 매입가→현재가: {position.avg_price:,} → {position.current_price:,}원\n"
+            f"• 수량: {position.quantity:,}주"
+        )
+        return self._send(text)
+
     def notify_kill_switch(self, reason: str) -> bool:
         """Kill switch 활성화 알림"""
         text = (

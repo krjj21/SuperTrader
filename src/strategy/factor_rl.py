@@ -1,7 +1,8 @@
 """
-팩터 + GRPO RL 타이밍 전략
+팩터 + PPO RL 타이밍 전략
 - 종목풀 내 종목에 대해 RL 에이전트 예측 기반 시그널
 - 포지션 상태를 추적하여 RL 에이전트에 전달
+- 백테스트 엔진과 포지션 동기화 지원
 """
 from __future__ import annotations
 
@@ -11,7 +12,7 @@ from src.strategy.base import BaseStrategy, TradeSignal, Signal
 
 
 class FactorRLStrategy(BaseStrategy):
-    """GRPO RL 타이밍 기반 전략 (포지션 인식)"""
+    """PPO RL 타이밍 기반 전략 (포지션 인식)"""
 
     def __init__(self, model_path: str, params: dict | None = None):
         super().__init__(name="factor_rl", params=params)
@@ -23,6 +24,21 @@ class FactorRLStrategy(BaseStrategy):
 
     def update_pool(self, codes: list[str]) -> None:
         self._pool = set(codes)
+
+    def sync_positions(self, held_codes: set[str], prices: dict[str, float] | None = None) -> None:
+        """백테스트 엔진의 실제 보유 종목과 동기화합니다."""
+        # 엔진에서 매도된 종목 제거
+        for code in list(self._positions):
+            if code not in held_codes:
+                del self._positions[code]
+        # 엔진에서 보유 중이지만 전략이 모르는 종목 추가
+        for code in held_codes:
+            if code not in self._positions:
+                price = prices.get(code, 0) if prices else 0
+                self._positions[code] = {
+                    "entry_price": float(price) if price > 0 else 1.0,
+                    "holding_days": 1,
+                }
 
     def generate_signal(
         self, stock_code: str, df: pd.DataFrame, stock_name: str = "",
@@ -49,7 +65,7 @@ class FactorRLStrategy(BaseStrategy):
         if holding:
             unrealized_pnl = (price / pos["entry_price"] - 1.0) if pos["entry_price"] > 0 else 0.0
             holding_days = pos["holding_days"]
-            pos["holding_days"] += 1  # 매일 증가
+            pos["holding_days"] += 1
 
         try:
             prediction = self.predictor.predict_with_position(
@@ -61,26 +77,17 @@ class FactorRLStrategy(BaseStrategy):
                 reason=f"예측 실패: {e}",
             )
 
-        if prediction == 1:
-            # BUY 시그널 → 포지션 기록
-            if not holding:
-                self._positions[stock_code] = {
-                    "entry_price": float(price),
-                    "holding_days": 0,
-                }
+        if prediction == 1 and not holding:
             return TradeSignal(
                 signal=Signal.BUY, stock_code=stock_code, stock_name=stock_name,
                 price=price, strength=0.75,
-                reason="GRPO RL BUY 예측",
+                reason="PPO RL BUY",
             )
-        elif prediction == -1:
-            # SELL 시그널 → 포지션 제거
-            if holding:
-                del self._positions[stock_code]
+        elif prediction == -1 and holding:
             return TradeSignal(
                 signal=Signal.SELL, stock_code=stock_code, stock_name=stock_name,
                 price=price, strength=0.65,
-                reason="GRPO RL SELL 예측",
+                reason="PPO RL SELL",
             )
 
         return TradeSignal(signal=Signal.HOLD, stock_code=stock_code, price=price)

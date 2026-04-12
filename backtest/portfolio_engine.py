@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import bisect
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -48,11 +49,18 @@ class PortfolioBacktestEngine:
         commission_rate: float = 0.00015,
         tax_rate: float = 0.0023,
         max_positions: int = 30,
+        stop_loss_pct: float | None = None,
     ):
         self.initial_capital = initial_capital
         self.commission_rate = commission_rate
         self.tax_rate = tax_rate
         self.max_positions = max_positions
+        if stop_loss_pct is None:
+            try:
+                stop_loss_pct = get_config().risk.stop_loss_pct
+            except Exception:
+                stop_loss_pct = 0.07
+        self.stop_loss_pct = stop_loss_pct
 
         self.cash = float(initial_capital)
         self.positions: dict[str, BacktestPosition] = {}
@@ -161,12 +169,21 @@ class PortfolioBacktestEngine:
         Returns:
             백테스트 결과 딕셔너리
         """
-        # 모든 거래일 수집
+        # ── 전처리: 날짜 변환 1회, 가격 캐시, 날짜 인덱스 구축 ──
+        price_cache: dict[str, dict[str, float]] = {}
+        date_lists: dict[str, list[str]] = {}
         all_dates = set()
-        for df in ohlcv_dict.values():
+
+        for code, df in ohlcv_dict.items():
             if "date" in df.columns:
-                all_dates.update(df["date"].astype(str).tolist())
+                date_strs = df["date"].astype(str).tolist()
+                df["date_str"] = date_strs
+                all_dates.update(date_strs)
+                date_lists[code] = date_strs
+                price_cache[code] = dict(zip(date_strs, df["close"].astype(float)))
+
         all_dates = sorted(all_dates)
+        self._price_cache = price_cache
 
         rebalance_set = set(rebalance_dates)
         current_pool = []
@@ -187,13 +204,13 @@ class PortfolioBacktestEngine:
                     # 퇴출 종목 매도
                     for code in old_set - new_set:
                         if code in self.positions:
-                            price = self._get_price(ohlcv_dict, code, date)
+                            price = self._get_price_cached(code, date)
                             if price > 0:
                                 self._sell(code, price, date)
 
                     # 신규 편입 종목 매수
                     for code in new_set - old_set:
-                        price = self._get_price(ohlcv_dict, code, date)
+                        price = self._get_price_cached(code, date)
                         if price > 0:
                             self._buy(code, "", price, date)
 
@@ -201,35 +218,56 @@ class PortfolioBacktestEngine:
 
                 current_pool = new_pool
 
+            # ── 손절 체크: 당일 종가 기준 pnl_pct ≤ -stop_loss_pct 이면 강제 매도 ──
+            stop_loss_threshold = -self.stop_loss_pct
+            stopped_today: set[str] = set()
+            for code in list(self.positions.keys()):
+                price = self._get_price_cached(code, date)
+                if price <= 0:
+                    continue
+                pos = self.positions[code]
+                pnl_pct = price / pos.avg_price - 1
+                if pnl_pct <= stop_loss_threshold:
+                    self._sell(code, price, date)
+                    stopped_today.add(code)
+
             # 일일 타이밍 시그널 (종목풀 내 종목)
             for code in current_pool:
                 if code not in ohlcv_dict:
                     continue
 
-                df = ohlcv_dict[code]
-                if "date" in df.columns:
-                    df_until = df[df["date"].astype(str) <= date]
-                else:
-                    df_until = df
-
-                if len(df_until) < 2:
+                dl = date_lists.get(code)
+                if not dl:
                     continue
 
+                idx = bisect.bisect_right(dl, date)
+                if idx < 2:
+                    continue
+
+                df_until = ohlcv_dict[code].iloc[:idx]
                 signal = strategy.generate_signal(code, df_until)
 
                 if signal.signal == Signal.BUY and code not in self.positions:
-                    price = self._get_price(ohlcv_dict, code, date)
+                    if code in stopped_today:
+                        continue  # 같은 날 재매수 방지
+                    price = self._get_price_cached(code, date)
                     if price > 0 and len(self.positions) < self.max_positions:
                         self._buy(code, signal.stock_name, price, date)
 
                 elif signal.signal == Signal.SELL and code in self.positions:
-                    price = self._get_price(ohlcv_dict, code, date)
+                    price = self._get_price_cached(code, date)
                     if price > 0:
                         self._sell(code, price, date)
 
+            # 전략-엔진 포지션 동기화 (RL 전략 등)
+            if hasattr(strategy, "sync_positions"):
+                held = set(self.positions.keys())
+                prices = {c: self._get_price_cached(c, date) for c in held}
+                strategy.sync_positions(held, prices)
+
             # 일일 포트폴리오 가치 기록
             prices = {
-                code: self._get_price(ohlcv_dict, code, date)
+                code: self._get_price_cached(code, date)
                 for code in self.positions
             }
             portfolio_value = self._get_portfolio_value(prices)
@@ -242,14 +280,11 @@ class PortfolioBacktestEngine:
 
         return self._compile_results()
 
-    def _get_price(self, ohlcv_dict: dict, code: str, date: str) -> float:
-        if code not in ohlcv_dict:
-            return 0.0
-        df = ohlcv_dict[code]
-        if "date" in df.columns:
-            row = df[df["date"].astype(str) == date]
-            if not row.empty:
-                return float(row["close"].iloc[0])
+    def _get_price_cached(self, code: str, date: str) -> float:
+        """캐시에서 O(1) 가격 조회"""
+        cache = self._price_cache.get(code)
+        if cache:
+            return cache.get(date, 0.0)
         return 0.0
 
     def _compile_results(self) -> dict:

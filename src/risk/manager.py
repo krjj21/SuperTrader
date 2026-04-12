@@ -20,7 +20,9 @@ class RiskManager:
 
     def __init__(self, account: AccountManager | None = None):
         self.config = get_config().risk
-        self._schedule = get_config().schedule
+        schedule = get_config().schedule
+        self._market_open = datetime.strptime(schedule.market_open, "%H:%M").time()
+        self._market_close = datetime.strptime(schedule.market_close, "%H:%M").time()
         self.account = account or AccountManager()
         self._daily_pnl: float = 0.0
         self._daily_date: str = ""
@@ -35,12 +37,10 @@ class RiskManager:
             return False
 
         now = datetime.now()
-        market_open = datetime.strptime(self._schedule.market_open, "%H:%M").time()
-        market_close = datetime.strptime(self._schedule.market_close, "%H:%M").time()
         current_time = now.time()
 
-        if current_time < market_open or current_time > market_close:
-            logger.debug(f"장 운영 시간 외: {current_time} (운영: {market_open}~{market_close})")
+        if current_time < self._market_open or current_time > self._market_close:
+            logger.debug(f"장 운영 시간 외: {current_time} (운영: {self._market_open}~{self._market_close})")
             return False
 
         # 주말 체크 (토=5, 일=6)
@@ -84,6 +84,26 @@ class RiskManager:
             )
             return False
         return True
+
+    def check_stop_loss(self, positions: list) -> list[str]:
+        """손절 임계값(-stop_loss_pct)을 초과한 종목코드 리스트를 반환합니다.
+
+        Args:
+            positions: AccountSummary.positions
+
+        Returns:
+            손절해야 할 종목코드 리스트
+        """
+        threshold_pct = -round(self.config.stop_loss_pct * 100, 4)  # 예: -7.0
+        stop_codes = []
+        for pos in positions:
+            if pos.pnl_pct <= threshold_pct:
+                stop_codes.append(pos.stock_code)
+                logger.warning(
+                    f"손절 트리거: {pos.stock_name}({pos.stock_code}) "
+                    f"{pos.pnl_pct:.2f}% ≤ {threshold_pct:.1f}%"
+                )
+        return stop_codes
 
     def calculate_position_size(
         self,

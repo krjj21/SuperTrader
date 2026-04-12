@@ -24,6 +24,8 @@ class Secrets(BaseSettings):
     slack_bot_token: str = Field(default="", alias="SLACK_BOT_TOKEN")
     slack_channel: str = Field(default="#auto-trading", alias="SLACK_CHANNEL")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
+    notion_token: str = Field(default="", alias="NOTION_TOKEN")
+    notion_database_id: str = Field(default="", alias="NOTION_DATABASE_ID")
 
     model_config = {"env_file": "config/.env", "extra": "ignore"}
 

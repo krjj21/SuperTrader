@@ -215,6 +215,7 @@ def run_live():
     # 팩터 기반 종목풀 구성
     from src.factors.stock_pool import build_stock_pool
     _current_pool = [None]  # mutable container for closure
+    _stock_names: dict[str, str] = {}  # 종목코드 → 종목명 캐시
 
     def rebalance_pool():
         """팩터 기반 종목풀을 리밸런싱합니다."""
@@ -224,6 +225,16 @@ def run_live():
             if pool.codes:
                 strategy.update_pool(pool.codes)
                 _current_pool[0] = pool
+
+                # 종목명 캐시 업데이트 (pykrx)
+                from pykrx import stock as krx
+                for code in pool.codes:
+                    if code not in _stock_names:
+                        try:
+                            _stock_names[code] = krx.get_market_ticker_name(code)
+                        except Exception:
+                            _stock_names[code] = ""
+
                 logger.info(f"종목풀 업데이트: {len(pool.codes)}종목 (신규 {len(pool.entered)}, 퇴출 {len(pool.exited)})")
                 notifier.notify_start()  # 종목풀 갱신 알림
             else:
@@ -244,6 +255,14 @@ def run_live():
     else:
         logger.info("LLM 시그널 검증 비활성화 — ANTHROPIC_API_KEY 미설정")
 
+    # Notion 일일 리포터
+    from src.notification.notion_reporter import NotionReporter
+    notion = NotionReporter()
+    if notion.is_enabled:
+        logger.info("Notion 일일 리포트 활성화")
+    else:
+        logger.info("Notion 일일 리포트 비활성화 — NOTION_TOKEN/NOTION_DATABASE_ID 미설정")
+
     notifier.notify_start()
 
     # 스케줄러
@@ -258,17 +277,51 @@ def run_live():
             balance = account_mgr.get_balance()
             risk_mgr.check_daily_loss_limit(balance.total_pnl, balance.total_eval)
 
-            # 보유 종목 코드 set
-            held_codes = {pos.stock_code for pos in balance.positions}
+            # 종목명 캐시 업데이트
+            for pos in balance.positions:
+                if pos.stock_name and pos.stock_code not in _stock_names:
+                    _stock_names[pos.stock_code] = pos.stock_name
+
+            # ── 손절 체크 (LLM 검증 없이 즉시 실행) ──
+            stop_codes = set(risk_mgr.check_stop_loss(balance.positions))
+            for pos in balance.positions:
+                if pos.stock_code not in stop_codes:
+                    continue
+                try:
+                    order = order_mgr.sell(pos.stock_code, pos.quantity)
+                    if order.order_no:
+                        notifier.notify_stop_loss(pos)
+                        logger.info(
+                            f"손절 매도: {pos.stock_name}({pos.stock_code}) "
+                            f"{pos.pnl_pct:.2f}% / {pos.pnl:,}원"
+                        )
+                except Exception as e:
+                    logger.error(f"손절 매도 실패: {pos.stock_code} - {e}")
+
+            # 손절된 종목은 같은 사이클에서 재매수 방지
+            held_codes = {
+                pos.stock_code for pos in balance.positions
+                if pos.stock_code not in stop_codes
+            }
 
             # 종목풀 내 종목에 대해 시그널 체크
-            for code in strategy._pool if hasattr(strategy, '_pool') else []:
+            pool_codes = list(strategy._pool) if hasattr(strategy, '_pool') else []
+            signal_summary = {"BUY": 0, "SELL": 0, "HOLD": 0, "error": 0}
+            for code in pool_codes:
                 ohlcv = client.get_daily_ohlcv(code)
                 if not ohlcv:
+                    signal_summary["error"] += 1
                     continue
 
                 df = pd.DataFrame(ohlcv)
-                signal = strategy.generate_signal(code, df)
+                stock_name = _stock_names.get(code, "")
+                try:
+                    signal = strategy.generate_signal(code, df, stock_name=stock_name)
+                except TypeError:
+                    signal = strategy.generate_signal(code, df)
+                if not signal.stock_name:
+                    signal.stock_name = stock_name
+                signal_summary[signal.signal.value] = signal_summary.get(signal.signal.value, 0) + 1
 
                 if signal.is_actionable:
                     # LLM 검증: ML 시그널을 기술적 맥락에서 확인
@@ -304,6 +357,7 @@ def run_live():
                                 if order.order_no:
                                     notifier.notify_order_filled(order)
 
+            logger.info(f"시그널 체크 완료: {len(pool_codes)}종목 — BUY:{signal_summary['BUY']} SELL:{signal_summary['SELL']} HOLD:{signal_summary['HOLD']} 오류:{signal_summary['error']}")
             risk_mgr.reset_error_count()
 
         except Exception as e:
@@ -335,6 +389,13 @@ def run_live():
             if feedback:
                 notifier.notify_daily_feedback(feedback)
                 logger.info(f"일일 피드백 전송 완료")
+
+            # Notion 일일 리포트
+            notion.publish_daily_report(
+                balance=balance,
+                trades=today_trades,
+                feedback=feedback or "",
+            )
 
         except Exception as e:
             logger.error(f"리포트 오류: {e}")

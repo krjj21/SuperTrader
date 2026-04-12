@@ -87,9 +87,16 @@
             font-size: 16px;
             font-weight: 600;
         }
+        /* 가로 스크롤 가능한 테이블 컨테이너 (모바일 대응) */
+        .table-scroll {
+            width: 100%;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
         table {
             width: 100%;
             border-collapse: collapse;
+            min-width: 600px;
         }
         th {
             text-align: left;
@@ -139,40 +146,51 @@
             color: #f85149;
         }
 
-        /* Pipeline */
-        .pipeline-wrap { padding: 20px; }
-        .pipeline-flow {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            flex-wrap: wrap;
+        /* Pipeline Table */
+        .pipeline-wrap { padding: 0; }
+        .pipe-table { width: 100%; border-collapse: collapse; }
+        .pipe-table th {
+            text-align: left;
+            padding: 12px 20px;
+            font-size: 12px;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #30363d;
         }
-        .pipe-step {
-            background: #21262d;
-            border: 2px solid #30363d;
-            border-radius: 10px;
-            padding: 14px 18px;
-            text-align: center;
-            min-width: 130px;
-            transition: all 0.3s;
+        .pipe-table td {
+            padding: 14px 20px;
+            font-size: 14px;
+            border-bottom: 1px solid #21262d;
         }
-        .pipe-step.active { border-color: #3fb950; }
-        .pipe-step.warning { border-color: #d29922; }
-        .pipe-step.error { border-color: #f85149; }
-        .pipe-step .pipe-icon { font-size: 22px; margin-bottom: 4px; }
-        .pipe-step .pipe-label { font-size: 12px; color: #8b949e; }
-        .pipe-step .pipe-value { font-size: 14px; font-weight: 600; margin-top: 2px; }
-        .pipe-arrow { color: #484f58; font-size: 20px; }
+        .pipe-table tr:last-child td { border-bottom: none; }
+        .pipe-icon-cell { font-size: 20px; width: 40px; text-align: center; }
+        .pipe-stage-name { font-weight: 600; color: #fff; }
+        .pipe-stage-detail { font-size: 12px; color: #8b949e; margin-top: 2px; }
+        .status-cell { text-align: right; width: 120px; }
+        .status-light {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            margin-right: 8px;
+            vertical-align: middle;
+            box-shadow: 0 0 8px currentColor;
+        }
+        .status-light.green { background: #3fb950; color: #3fb950; animation: pulse 2s infinite; }
+        .status-light.yellow { background: #d29922; color: #d29922; }
+        .status-light.red { background: #f85149; color: #f85149; }
+        .status-text { font-size: 12px; font-weight: 600; vertical-align: middle; }
         .pipe-meta {
             display: flex;
-            justify-content: center;
-            gap: 24px;
-            margin-top: 16px;
+            justify-content: space-around;
+            padding: 14px 20px;
+            background: #0d1117;
+            border-top: 1px solid #30363d;
             font-size: 13px;
             color: #8b949e;
         }
-        .pipe-meta span { display: flex; align-items: center; gap: 4px; }
+        .pipe-meta span { display: flex; align-items: center; gap: 6px; }
         .dot-green { color: #3fb950; }
         .dot-red { color: #f85149; }
         .dot-yellow { color: #d29922; }
@@ -232,6 +250,27 @@
             font-size: 12px;
             color: #484f58;
         }
+
+        /* Mobile responsive */
+        @media (max-width: 768px) {
+            body { padding: 10px; }
+            .header { flex-direction: column; align-items: flex-start; gap: 8px; margin-bottom: 16px; }
+            .header h1 { font-size: 20px; }
+            .cards { grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 16px; }
+            .card { padding: 14px; }
+            .card-value { font-size: 20px; }
+            .card-sub { font-size: 12px; }
+            .table-header { padding: 12px 14px; font-size: 14px; }
+            th, td { padding: 10px 12px; font-size: 12px; }
+            table { min-width: 560px; }
+            .pipe-table { min-width: 0; }
+            .pipe-table td { padding: 10px 12px; }
+            .pipe-stage-detail { font-size: 11px; }
+            .pipe-meta { flex-wrap: wrap; gap: 8px; padding: 10px 14px; font-size: 11px; }
+            .signal-reason { max-width: 140px; }
+            .stock-name { font-size: 13px; }
+            .stock-code { font-size: 11px; }
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
@@ -247,6 +286,15 @@
 
     <div class="cards" id="cards">
         <div class="loading">Loading...</div>
+    </div>
+
+    <!-- Returns Chart -->
+    <div class="table-wrap" style="margin-bottom:24px;">
+        <div class="table-header">Cumulative Return</div>
+        <div style="padding:20px;">
+            <div id="returns-empty" class="loading" style="display:none;">No return data yet</div>
+            <canvas id="returnsChart" height="100"></canvas>
+        </div>
     </div>
 
     <!-- Pipeline Flow -->
@@ -349,44 +397,76 @@
         }
 
         // ── Pipeline ──
+        function statusLight(status, label) {
+            return `<span class="status-light ${status}"></span><span class="status-text">${label}</span>`;
+        }
+
         function renderPipeline(p) {
             const ks = p.kill_switch;
+            const stages = [
+                {
+                    icon: '📊',
+                    name: 'Factor Pool',
+                    detail: `${p.pool_size} stocks (monthly rebalance)`,
+                    status: 'green',
+                    label: 'OK',
+                },
+                {
+                    icon: '🤖',
+                    name: 'PPO RL Timing',
+                    detail: `Strategy: ${p.strategy}`,
+                    status: 'green',
+                    label: 'OK',
+                },
+                {
+                    icon: '🧠',
+                    name: 'LLM Validation',
+                    detail: p.llm_enabled ? 'Claude Haiku' : 'Disabled (no API key)',
+                    status: p.llm_enabled ? 'green' : 'yellow',
+                    label: p.llm_enabled ? 'OK' : 'OFF',
+                },
+                {
+                    icon: ks ? '🚨' : '🛡️',
+                    name: 'Risk Manager',
+                    detail: `Loss limit ${p.daily_loss_limit}% / Max ${p.max_positions} positions`,
+                    status: ks ? 'red' : 'green',
+                    label: ks ? 'KILL SWITCH' : 'OK',
+                },
+                {
+                    icon: ks ? '⏸️' : '✅',
+                    name: 'Order Execution',
+                    detail: `Signal check every ${p.check_interval}s`,
+                    status: ks ? 'red' : 'green',
+                    label: ks ? 'Paused' : 'OK',
+                },
+            ];
+
+            const rows = stages.map(s => `
+                <tr>
+                    <td class="pipe-icon-cell">${s.icon}</td>
+                    <td>
+                        <div class="pipe-stage-name">${s.name}</div>
+                        <div class="pipe-stage-detail">${s.detail}</div>
+                    </td>
+                    <td class="status-cell">${statusLight(s.status, s.label)}</td>
+                </tr>
+            `).join('');
+
             return `
-            <div class="pipeline-flow">
-                <div class="pipe-step active">
-                    <div class="pipe-icon">📊</div>
-                    <div class="pipe-label">Factor Pool</div>
-                    <div class="pipe-value">${p.pool_size} stocks</div>
-                </div>
-                <div class="pipe-arrow">→</div>
-                <div class="pipe-step active">
-                    <div class="pipe-icon">🤖</div>
-                    <div class="pipe-label">GRPO RL</div>
-                    <div class="pipe-value">${p.strategy}</div>
-                </div>
-                <div class="pipe-arrow">→</div>
-                <div class="pipe-step ${p.llm_enabled ? 'active' : 'warning'}">
-                    <div class="pipe-icon">🧠</div>
-                    <div class="pipe-label">LLM Validation</div>
-                    <div class="pipe-value">${p.llm_enabled ? 'Claude Haiku' : 'Disabled'}</div>
-                </div>
-                <div class="pipe-arrow">→</div>
-                <div class="pipe-step ${ks ? 'error' : 'active'}">
-                    <div class="pipe-icon">${ks ? '🚨' : '🛡️'}</div>
-                    <div class="pipe-label">Risk Manager</div>
-                    <div class="pipe-value">${ks ? 'KILL SWITCH' : 'Active'}</div>
-                </div>
-                <div class="pipe-arrow">→</div>
-                <div class="pipe-step ${ks ? 'error' : 'active'}">
-                    <div class="pipe-icon">${ks ? '⏸️' : '✅'}</div>
-                    <div class="pipe-label">Order Execution</div>
-                    <div class="pipe-value">${ks ? 'Paused' : 'Ready'}</div>
-                </div>
-            </div>
+            <table class="pipe-table">
+                <thead>
+                    <tr>
+                        <th></th>
+                        <th>Stage</th>
+                        <th style="text-align:right;">Status</th>
+                    </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+            </table>
             <div class="pipe-meta">
-                <span>Check: every ${p.check_interval}s</span>
-                <span>Loss limit: ${p.daily_loss_limit}%</span>
-                <span>Max positions: ${p.max_positions}</span>
+                <span><span class="dot-green">●</span> Check: every ${p.check_interval}s</span>
+                <span><span class="dot-yellow">●</span> Loss limit: ${p.daily_loss_limit}%</span>
+                <span><span class="dot-green">●</span> Max positions: ${p.max_positions}</span>
             </div>`;
         }
 
@@ -404,22 +484,26 @@
         function renderSignals(signals) {
             if (!signals.length) return '<div class="loading">No signals yet</div>';
             let rows = signals.map(s => {
-                const sigCls = s.signal === 'BUY' ? 'signal-buy' : s.signal === 'SELL' ? 'signal-sell' : 'signal-hold';
-                const decCls = s.decision === '확정' ? 'decision-confirmed' : 'decision-rejected';
-                return `<tr>
+                const isScan = s.type === 'summary';
+                const sigCls = s.signal === 'BUY' ? 'signal-buy' : s.signal === 'SELL' ? 'signal-sell' : isScan ? 'neutral' : 'signal-hold';
+                const decCls = s.decision === '확정' ? 'decision-confirmed' : isScan ? 'neutral' : 'decision-rejected';
+                const stockCell = isScan
+                    ? `<span class="stock-name">${s.stock_name || '-'}</span>`
+                    : `<span class="stock-name">${s.stock_name || '-'}</span>${s.stock_code ? `<span class="stock-code">${s.stock_code}</span>` : ''}`;
+                return `<tr${isScan ? ' style="background:#1a1f2b;"' : ''}>
                     <td>${s.time}</td>
-                    <td>${s.stock}</td>
+                    <td>${stockCell}</td>
                     <td class="${sigCls}">${s.signal}</td>
                     <td class="${decCls}">${s.decision}</td>
                     <td class="signal-reason" title="${s.reason}">${s.reason}</td>
                 </tr>`;
             }).join('');
-            return `<table>
+            return `<div class="table-scroll"><table>
                 <thead><tr>
                     <th>Time</th><th>Stock</th><th>Signal</th><th>Decision</th><th>Reason</th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
-            </table>`;
+            </table></div>`;
         }
 
         async function refreshSignals() {
@@ -533,20 +617,97 @@
                 </tr>`;
             }).join('');
             return `
-            <table>
+            <div class="table-scroll"><table>
                 <thead><tr>
                     <th>Stock</th><th>Qty</th><th>Avg Price</th><th>Current</th><th>Value</th><th>P&L</th><th>Return</th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
-            </table>`;
+            </table></div>`;
+        }
+
+        // ── Returns Chart ──
+        let returnsChartObj = null;
+
+        async function refreshReturns() {
+            try {
+                const res = await fetch('/api/returns');
+                const d = await res.json();
+                if (!d.ok || !d.dates.length) {
+                    document.getElementById('returnsChart').style.display = 'none';
+                    document.getElementById('returns-empty').style.display = 'block';
+                    return;
+                }
+                document.getElementById('returnsChart').style.display = '';
+                document.getElementById('returns-empty').style.display = 'none';
+
+                const labels = d.dates.map(s => s.slice(2));  // YY-MM-DD
+                const data = d.cumulative_return;
+
+                // 그라데이션 fill
+                const ctx = document.getElementById('returnsChart').getContext('2d');
+                const gradient = ctx.createLinearGradient(0, 0, 0, ctx.canvas.clientHeight || 300);
+                const lastVal = data[data.length - 1];
+                if (lastVal >= 0) {
+                    gradient.addColorStop(0, 'rgba(63,185,80,0.3)');
+                    gradient.addColorStop(1, 'rgba(63,185,80,0.0)');
+                } else {
+                    gradient.addColorStop(0, 'rgba(248,81,73,0.0)');
+                    gradient.addColorStop(1, 'rgba(248,81,73,0.3)');
+                }
+
+                if (returnsChartObj) returnsChartObj.destroy();
+                returnsChartObj = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels,
+                        datasets: [{
+                            label: 'Cumulative Return (%)',
+                            data: data,
+                            borderColor: lastVal >= 0 ? '#3fb950' : '#f85149',
+                            borderWidth: 2,
+                            pointRadius: 0,
+                            pointHitRadius: 8,
+                            fill: true,
+                            backgroundColor: gradient,
+                            tension: 0.3,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx) {
+                                        return (ctx.parsed.y >= 0 ? '+' : '') + ctx.parsed.y.toFixed(2) + '%';
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { ticks: { color: '#484f58', maxTicksLimit: 12, font: { size: 11 } }, grid: { color: '#21262d' } },
+                            y: {
+                                ticks: {
+                                    color: '#484f58',
+                                    callback: function(v) { return (v >= 0 ? '+' : '') + v + '%'; }
+                                },
+                                grid: { color: '#21262d' }
+                            }
+                        }
+                    }
+                });
+            } catch (e) {}
         }
 
         refresh();
         refreshPipeline();
         refreshSignals();
+        refreshReturns();
         setInterval(refresh, 30000);
         setInterval(refreshPipeline, 30000);
         setInterval(refreshSignals, 30000);
+        setInterval(refreshReturns, 300000);  // 5분마다 갱신
     </script>
 </body>
 </html>

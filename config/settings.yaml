@@ -78,16 +78,16 @@ timing:
     epochs: 100
     batch_size: 64
 
-  # GRPO RL
+  # PPO RL
   rl:
     learning_rate: 0.0003
     gamma: 0.99
     group_size: 8
     clip_epsilon_low: 0.2
     clip_epsilon_high: 0.28
-    entropy_coeff: 0.01
+    entropy_coeff: 0.03      # 0.01 → 0.03 (탐색 증가, 과도 수렴 방지)
     epochs_per_update: 4
-    episodes: 50
+    episodes: 200            # 100 → 200 (충분한 학습)
     hidden_dim: 256
 
 # ── 전략 파라미터 ──

@@ -28,6 +28,23 @@ app = Flask(__name__)
 
 _client = None
 _account_mgr = None
+_stock_name_cache: dict[str, str] = {}
+
+
+def _lookup_stock_name(code: str) -> str:
+    """종목코드 → 종목명 (pykrx 캐시)"""
+    if not code or not code.isdigit() or len(code) != 6:
+        return ""
+    if code in _stock_name_cache:
+        return _stock_name_cache[code]
+    try:
+        from pykrx import stock as krx
+        name = krx.get_market_ticker_name(code) or ""
+        _stock_name_cache[code] = name
+        return name
+    except Exception:
+        _stock_name_cache[code] = ""
+        return ""
 
 
 def _get_account_mgr():
@@ -135,25 +152,91 @@ def api_signals():
         signals = []
         # LLM 검증 로그 패턴: "LLM 검증 [종목명] SIGNAL: 확정/보류 — 이유"
         # 종목명이 빈 경우도 허용
-        pattern = re.compile(
+        llm_pattern = re.compile(
             r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ \| INFO .+LLM .+ \[(.*?)\] (BUY|SELL): (\S+) . (.+)"
         )
+        # LLM 보류 로그 패턴
+        reject_pattern = re.compile(
+            r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ \| INFO .+LLM 보류: (.+?) (BUY|SELL) . (.+)"
+        )
+        # 시그널 체크 요약 패턴: "시그널 체크 완료: 30종목 — BUY:0 SELL:0 HOLD:30 오류:0"
+        summary_pattern = re.compile(
+            r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ \| INFO .+시그널 체크 완료: (\d+)종목 . BUY:(\d+) SELL:(\d+) HOLD:(\d+) 오류:(\d+)"
+        )
+
+        def parse_stock_field(s: str) -> tuple[str, str]:
+            """'code|name', 'code', 또는 'name' 형식 파싱 → (code, name)"""
+            if not s:
+                return "", "-"
+            s = s.strip()
+            # 'code|name' 형식
+            if "|" in s:
+                code, name = s.split("|", 1)
+                code = code.strip()
+                name = name.strip()
+                if code.isdigit() and len(code) == 6 and not name or name == "-":
+                    name = _lookup_stock_name(code) or "-"
+                return code, name or "-"
+            # 6자리 숫자 → stock_code (이름 조회)
+            if s.isdigit() and len(s) == 6:
+                name = _lookup_stock_name(s) or "-"
+                return s, name
+            # 그 외 → stock_name only
+            return "", s
 
         for line in reversed(lines):
-            m = pattern.search(line)
+            # LLM 검증 확정
+            m = llm_pattern.search(line)
             if m:
                 ts, stock, signal, decision, reason = m.groups()
-                # 인코딩 이슈 대응: 확정/보류 판단
+                code, name = parse_stock_field(stock)
                 confirmed = "확정" in decision or "Confirmed" in decision or "보류" not in decision
                 signals.append({
                     "time": ts,
-                    "stock": stock,
+                    "stock_code": code,
+                    "stock_name": name,
                     "signal": signal,
                     "decision": "확정" if confirmed else "보류",
                     "reason": reason[:100],
+                    "type": "llm",
                 })
-            if len(signals) >= 30:
-                break
+                if len(signals) >= 30:
+                    break
+                continue
+
+            # LLM 보류
+            m = reject_pattern.search(line)
+            if m:
+                ts, stock, signal, reason = m.groups()
+                code, name = parse_stock_field(stock)
+                signals.append({
+                    "time": ts,
+                    "stock_code": code,
+                    "stock_name": name,
+                    "signal": signal,
+                    "decision": "보류",
+                    "reason": reason[:100],
+                    "type": "llm",
+                })
+                if len(signals) >= 30:
+                    break
+                continue
+
+            # 시그널 체크 요약
+            m = summary_pattern.search(line)
+            if m:
+                ts, total, buy, sell, hold, err = m.groups()
+                signals.append({
+                    "time": ts,
+                    "stock_code": "",
+                    "stock_name": f"{total}종목 스캔",
+                    "signal": "SCAN",
+                    "decision": f"B:{buy} S:{sell} H:{hold}",
+                    "reason": f"오류: {err}" if int(err) > 0 else "정상",
+                    "type": "summary",
+                })
+                if len(signals) >= 30:
+                    break
 
         return jsonify({"ok": True, "signals": signals})
     except Exception as e:
@@ -182,6 +265,47 @@ def api_feedback():
             return jsonify({"ok": True, "feedback": "최근 피드백이 Slack으로 전송되었습니다."})
 
         return jsonify({"ok": True, "feedback": None})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/returns")
+def api_returns():
+    """일일 수익률 시계열 API — DailyPnL 테이블에서 조회"""
+    try:
+        from src.db.models import init_db, get_session, DailyPnL
+
+        init_db()
+        session = get_session()
+        rows = session.query(DailyPnL).order_by(DailyPnL.date).all()
+        session.close()
+
+        if not rows:
+            return jsonify({"ok": True, "dates": [], "total_eval": [], "total_pnl_pct": []})
+
+        initial_eval = rows[0].total_eval - rows[0].total_pnl if rows[0].total_eval else 10_000_000
+        if initial_eval <= 0:
+            initial_eval = 10_000_000
+
+        dates = []
+        total_eval = []
+        total_pnl_pct = []
+        cumulative_return = []
+
+        for r in rows:
+            dates.append(f"{r.date[:4]}-{r.date[4:6]}-{r.date[6:]}" if len(r.date) == 8 else r.date)
+            total_eval.append(r.total_eval)
+            total_pnl_pct.append(round(r.total_pnl_pct, 2))
+            cum_ret = round((r.total_eval / initial_eval - 1) * 100, 2) if r.total_eval else 0
+            cumulative_return.append(cum_ret)
+
+        return jsonify({
+            "ok": True,
+            "dates": dates,
+            "total_eval": total_eval,
+            "total_pnl_pct": total_pnl_pct,
+            "cumulative_return": cumulative_return,
+        })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

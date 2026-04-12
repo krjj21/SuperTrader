@@ -80,7 +80,7 @@ All strategies inherit `BaseStrategy` (in `base.py`) and implement `generate_sig
 - **FactorMACDStrategy**: MACD golden/death cross signals with RSI confirmation.
 - **FactorKDJStrategy**: KDJ overbought/oversold + J-line crossover signals.
 - **FactorMLStrategy**: Wraps any ML model via `TimingPredictor`. Loads model by type string + path.
-- **FactorRLStrategy**: GRPO (Group Relative Policy Optimization) RL agent. Critic-free, group advantage 기반. `.pt` 파일.
+- **FactorRLStrategy**: PPO (Proximal Policy Optimization) RL agent. Actor-Critic + GAE + Differential Sharpe Ratio reward. `.pt` 파일.
 
 `Signal` enum: `BUY`, `SELL`, `HOLD`. `TradeSignal` dataclass includes strength (0-1), reason, stop_loss, take_profit.
 
@@ -93,9 +93,9 @@ All strategies inherit `BaseStrategy` (in `base.py`) and implement `generate_sig
 - **retrain.py**: Auto-retraining — trains new model, compares F1/accuracy against existing, replaces only if improved, backs up old model
 - **llm_validator.py**: LLM signal validation — sends ML signal + technical context to Claude Haiku, confirms or rejects based on RSI/MA/volume analysis
 - Model implementations: `decision_tree.py`, `gradient_boost.py` (XGBoost/LightGBM), `lstm_model.py`, `transformer_model.py`
-- **rl_env.py**: Trading Gym environment — State(40 features + 3 position) / Action(BUY/HOLD/SELL) / Reward(return - cost - drawdown penalty)
-- **rl_agent.py**: GRPO Actor network + group sampling + decoupled clipping. Compatible with existing model interface (train/predict/save/load)
-- **rl_trainer.py**: Multi-stock episode training, walk-forward validation, Sharpe-based model selection
+- **rl_env.py**: Trading Gym environment — State(30 features + 3 position) / Action(BUY/HOLD/SELL) / Reward: Differential Sharpe Ratio + drawdown penalty + transaction cost. Log-return 기반 risk-adjusted reward
+- **rl_agent.py**: PPO Actor-Critic (shared backbone + LayerNorm) + GAE (λ=0.95) + mini-batch update. Legacy GRPO 모델 자동 변환 로드 지원
+- **rl_trainer.py**: Multi-stock batch rollout → PPO update, walk-forward validation, Sharpe-based model selection, early stopping
 
 sklearn models save as `.pkl`, torch models as `.pt`.
 
