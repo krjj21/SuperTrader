@@ -28,9 +28,9 @@ class TradingEnv:
         dsr_eta: float = 0.01,
         drawdown_lambda: float = 1.0,
         drawdown_threshold: float = 0.05,
-        holding_cost: float = 0.0005,       # 일별 보유 비용 (장기 보유 억제)
-        holding_cost_ramp: float = 0.0001,   # 보유일 증가에 따른 추가 비용
-        opportunity_weight: float = 0.5,     # 미보유 시 기회비용 가중치
+        holding_cost: float = 0.0002,       # 일별 보유 비용 (v2: 0.0005 → 과매매)
+        holding_cost_ramp: float = 0.00005,  # 보유일 증가에 따른 추가 비용
+        opportunity_weight: float = 0.35,    # 미보유 시 기회비용 가중치 (v2: 0.5 → 과매매)
         invalid_penalty: float = 0.002,
     ):
         self.commission_rate = commission_rate
