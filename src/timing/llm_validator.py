@@ -19,9 +19,11 @@ class SignalValidator:
     """LLM 기반 매매 시그널 검증"""
 
     API_URL = "https://api.anthropic.com/v1/messages"
+    DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 
-    def __init__(self):
+    def __init__(self, model: str | None = None):
         self.api_key = get_secrets().anthropic_api_key
+        self.model = model or self.DEFAULT_MODEL
         if not self.api_key:
             logger.warning("ANTHROPIC_API_KEY 미설정 — LLM 검증 비활성화")
 
@@ -133,7 +135,7 @@ ML 모델이 생성한 매매 시그널을 기술적 맥락에서 검증합니�
                         "content-type": "application/json",
                     },
                     json={
-                        "model": "claude-haiku-4-5-20251001",
+                        "model": self.model,
                         "max_tokens": 200,
                         "system": system_prompt,
                         "messages": [{"role": "user", "content": user_prompt}],
@@ -263,7 +265,7 @@ ML 모델이 생성한 매매 시그널을 기술적 맥락에서 검증합니�
                         "content-type": "application/json",
                     },
                     json={
-                        "model": "claude-haiku-4-5-20251001",
+                        "model": self.model,
                         "max_tokens": 500,
                         "system": system_prompt,
                         "messages": [{"role": "user", "content": user_prompt}],

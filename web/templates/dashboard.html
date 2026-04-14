@@ -119,10 +119,12 @@
         .stock-name {
             font-weight: 600;
             color: #fff;
+            white-space: nowrap;
         }
         .stock-code {
             font-size: 12px;
             color: #8b949e;
+            white-space: nowrap;
             margin-left: 6px;
         }
         .pnl-bar {
@@ -195,13 +197,61 @@
         .dot-red { color: #f85149; }
         .dot-yellow { color: #d29922; }
 
+        /* Factor Pool */
+        #factor-pool {
+            max-height: 420px;
+            overflow-y: auto;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        #factor-pool table { min-width: 500px; }
+        #factor-pool thead th {
+            position: sticky;
+            top: 0;
+            background: #161b22;
+            z-index: 1;
+        }
+        .pool-rank { color: #8b949e; font-size: 12px; width: 40px; text-align: center; }
+        .pool-score-bar {
+            display: inline-block;
+            height: 6px;
+            border-radius: 3px;
+            background: #58a6ff;
+            vertical-align: middle;
+            margin-right: 8px;
+        }
+        .pool-meta {
+            padding: 10px 20px;
+            border-top: 1px solid #30363d;
+            font-size: 12px;
+            color: #8b949e;
+        }
+
         /* Signal Log */
         .signal-buy { color: #3fb950; font-weight: 600; }
         .signal-sell { color: #f85149; font-weight: 600; }
         .signal-hold { color: #8b949e; }
         .decision-confirmed { color: #3fb950; }
         .decision-rejected { color: #d29922; }
-        .signal-reason { font-size: 12px; color: #8b949e; max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .signal-reason { font-size: 12px; color: #8b949e; min-width: 300px; white-space: normal; word-break: break-word; line-height: 1.5; text-align: left; }
+        #signal-log td:nth-child(2) { white-space: nowrap; width: 1%; }
+        #signal-log td:nth-child(3) { white-space: nowrap; width: 1%; text-align: center; }
+        #signal-log td:nth-child(4) { white-space: nowrap; width: 1%; text-align: center; }
+        #signal-log th:nth-child(3), #signal-log th:nth-child(4) { text-align: center; }
+        #signal-log th:nth-child(5), #signal-log td:nth-child(5) { text-align: left; }
+        #signal-log {
+            max-height: 480px;
+            overflow-y: auto;
+            overflow-x: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+        #signal-log table { min-width: 900px; }
+        #signal-log thead th {
+            position: sticky;
+            top: 0;
+            background: #161b22;
+            z-index: 1;
+        }
 
         /* Chart Modal */
         .chart-modal {
@@ -297,14 +347,6 @@
         </div>
     </div>
 
-    <!-- Pipeline Flow -->
-    <div class="table-wrap" style="margin-bottom:24px;">
-        <div class="table-header">Algorithm Pipeline</div>
-        <div id="pipeline" class="pipeline-wrap">
-            <div class="loading">Loading...</div>
-        </div>
-    </div>
-
     <!-- Holdings -->
     <div class="table-wrap" style="margin-bottom:24px;">
         <div class="table-header">Holdings</div>
@@ -313,8 +355,16 @@
         </div>
     </div>
 
-    <!-- Signal Log -->
+    <!-- Factor Pool -->
     <div class="table-wrap" style="margin-bottom:24px;">
+        <div class="table-header">Factor Pool</div>
+        <div id="factor-pool">
+            <div class="loading">Loading...</div>
+        </div>
+    </div>
+
+    <!-- Signal Log (independent container, not .table-wrap) -->
+    <div id="signal-section" style="background:#161b22; border:1px solid #30363d; border-radius:12px; margin-bottom:24px;">
         <div class="table-header">Recent Signals (RL + LLM Validation)</div>
         <div id="signal-log">
             <div class="loading">Loading...</div>
@@ -334,7 +384,7 @@
         </div>
     </div>
 
-    <div class="footer">SuperTrader Dashboard &mdash; Factor + GRPO RL + LLM Trading System</div>
+    <div class="footer">SuperTrader Dashboard &mdash; Factor + PPO RL + LLM Trading System</div>
 
     <script>
         function fmt(n) {
@@ -361,19 +411,29 @@
                     <div class="card-sub neutral">Initial: ${fmt(s.initial_capital)}</div>
                 </div>
                 <div class="card">
-                    <div class="card-label">Total Return</div>
-                    <div class="card-value ${pctClass(s.total_return_pct)}">${pctSign(s.total_return_pct)}</div>
-                    <div class="card-sub ${pctClass(s.total_pnl)}">${pnlSign(s.total_pnl)} won</div>
+                    <div class="card-label">Asset Change</div>
+                    <div class="card-value ${pctClass(s.asset_change)}">${pnlSign(s.asset_change)}</div>
+                    <div class="card-sub ${pctClass(s.asset_change_pct)}">${pctSign(s.asset_change_pct)}</div>
                 </div>
                 <div class="card">
-                    <div class="card-label">Deposit</div>
-                    <div class="card-value">${fmt(s.total_deposit)}</div>
-                    <div class="card-sub neutral">Available cash</div>
+                    <div class="card-label">Realized P&L</div>
+                    <div class="card-value ${pctClass(s.realized_pnl)}">${pnlSign(s.realized_pnl)}</div>
+                    <div class="card-sub neutral">Trades: ${s.n_trades || 0}</div>
                 </div>
                 <div class="card">
-                    <div class="card-label">Holdings</div>
-                    <div class="card-value">${s.num_positions}</div>
-                    <div class="card-sub neutral">Invested: ${fmt(s.total_invested)}</div>
+                    <div class="card-label">Unrealized P&L</div>
+                    <div class="card-value ${pctClass(s.unrealized_pnl)}">${pnlSign(s.unrealized_pnl)}</div>
+                    <div class="card-sub neutral">${s.num_positions} positions</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Available</div>
+                    <div class="card-value">${fmt(s.available_cash)}</div>
+                    <div class="card-sub neutral">Deposit: ${fmt(s.total_deposit)}</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Today Volume</div>
+                    <div class="card-value neutral" style="font-size:20px;">B ${fmt(s.total_buy || 0)}</div>
+                    <div class="card-sub neutral">S ${fmt(s.total_sell || 0)}</div>
                 </div>
             `;
         }
@@ -480,6 +540,42 @@
             } catch (e) {}
         }
 
+        // ── Factor Pool ──
+        function renderPool(data) {
+            if (!data.stocks || !data.stocks.length) return '<div class="loading">No pool data</div>';
+            const maxScore = Math.max(...data.stocks.map(s => Math.abs(s.score)), 0.001);
+            let rows = data.stocks.map((s, i) => {
+                const barW = Math.min(Math.abs(s.score) / maxScore * 80, 80);
+                return `<tr class="clickable" onclick="showChart('${s.code}','${s.name || s.code}')">
+                    <td class="pool-rank">${i + 1}</td>
+                    <td><span class="stock-name">${s.name || '-'}</span><span class="stock-code">${s.code}</span></td>
+                    <td style="text-align:right;">
+                        <span class="pool-score-bar" style="width:${barW}px;"></span>
+                        ${s.score.toFixed(4)}
+                    </td>
+                </tr>`;
+            }).join('');
+            const meta = `<div class="pool-meta">Date: ${data.date || '-'} · ${data.count} stocks · Entered: ${(data.entered||[]).length} · Exited: ${(data.exited||[]).length}</div>`;
+            return `<table>
+                <thead><tr>
+                    <th style="width:40px;text-align:center;">#</th>
+                    <th style="width:1%;white-space:nowrap;">Stock</th>
+                    <th style="text-align:right;">Composite Score</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>${meta}`;
+        }
+
+        async function refreshPool() {
+            try {
+                const res = await fetch('/api/pool');
+                const data = await res.json();
+                if (data.ok) {
+                    document.getElementById('factor-pool').innerHTML = renderPool(data);
+                }
+            } catch (e) {}
+        }
+
         // ── Signal Log ──
         function renderSignals(signals) {
             if (!signals.length) return '<div class="loading">No signals yet</div>';
@@ -498,12 +594,12 @@
                     <td class="signal-reason" title="${s.reason}">${s.reason}</td>
                 </tr>`;
             }).join('');
-            return `<div class="table-scroll"><table>
+            return `<table>
                 <thead><tr>
-                    <th>Time</th><th>Stock</th><th>Signal</th><th>Decision</th><th>Reason</th>
+                    <th>Time</th><th style="width:1%;white-space:nowrap;">Stock</th><th>Signal</th><th>Decision</th><th>Reason</th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
-            </table></div>`;
+            </table>`;
         }
 
         async function refreshSignals() {
@@ -619,7 +715,7 @@
             return `
             <div class="table-scroll"><table>
                 <thead><tr>
-                    <th>Stock</th><th>Qty</th><th>Avg Price</th><th>Current</th><th>Value</th><th>P&L</th><th>Return</th>
+                    <th style="width:1%;white-space:nowrap;">Stock</th><th>Qty</th><th>Avg Price</th><th>Current</th><th>Value</th><th>P&L</th><th>Return</th>
                 </tr></thead>
                 <tbody>${rows}</tbody>
             </table></div>`;
@@ -701,11 +797,11 @@
         }
 
         refresh();
-        refreshPipeline();
+        refreshPool();
         refreshSignals();
         refreshReturns();
         setInterval(refresh, 30000);
-        setInterval(refreshPipeline, 30000);
+        setInterval(refreshPool, 60000);      // 1분마다 갱신
         setInterval(refreshSignals, 30000);
         setInterval(refreshReturns, 300000);  // 5분마다 갱신
     </script>

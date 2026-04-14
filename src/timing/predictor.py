@@ -39,6 +39,8 @@ class TimingPredictor:
         holding: bool = False,
         unrealized_pnl: float = 0.0,
         holding_days: int = 0,
+        buy_threshold: float = 0.08,
+        sell_threshold: float = 0.05,
     ) -> int:
         """포지션 상태를 반영한 예측 (RL 모델용).
 
@@ -48,6 +50,8 @@ class TimingPredictor:
             features = build_features(df)
             return self.model.predict_with_position(
                 features, holding, unrealized_pnl, holding_days,
+                buy_threshold=buy_threshold,
+                sell_threshold=sell_threshold,
             )
         return self.predict(df)
 

@@ -229,8 +229,12 @@ class RLTimingModel:
             "entropy": total_entropy / n_updates,
         }
 
-    def collect_episode(self, env, df: pd.DataFrame) -> dict:
-        """에피소드를 수집합니다 (PPO rollout)."""
+    def collect_episode(self, env, df: pd.DataFrame, deterministic: bool = False) -> dict:
+        """에피소드를 수집합니다 (PPO rollout).
+
+        Args:
+            deterministic: True이면 argmax 정책 (평가용), False이면 확률적 샘플링 (학습용)
+        """
         state = env.reset(df)
         states, actions, rewards, log_probs, values, dones = [], [], [], [], [], []
 
@@ -242,7 +246,13 @@ class RLTimingModel:
             state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
 
             with torch.no_grad():
-                action, log_prob, value = self.actor.sample_action(state_tensor)
+                if deterministic:
+                    probs, value = self.actor(state_tensor)
+                    action = probs.argmax(dim=-1).item()
+                    log_prob = torch.log(probs.squeeze(0)[action] + 1e-8).item()
+                    value = value.item()
+                else:
+                    action, log_prob, value = self.actor.sample_action(state_tensor)
 
             next_state, reward, done, info = env.step(action)
 
@@ -338,8 +348,8 @@ class RLTimingModel:
         holding: bool = False,
         unrealized_pnl: float = 0.0,
         holding_days: int = 0,
-        buy_threshold: float = 0.10,
-        sell_threshold: float = 0.10,
+        buy_threshold: float = 0.08,
+        sell_threshold: float = 0.05,
     ) -> int:
         """포지션 상태를 반영하여 단일 종목의 최신 시그널을 예측합니다.
 

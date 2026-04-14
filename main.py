@@ -129,8 +129,19 @@ def _build_pool_history_factor_based(
 
 def _generate_rebalance_dates(start: str, end: str, freq: str) -> list[str]:
     """리밸런싱 날짜를 생성합니다."""
+    from datetime import timedelta
+
     start_dt = datetime.strptime(start, "%Y%m%d")
     end_dt = datetime.strptime(end, "%Y%m%d")
+
+    if freq == "biweekly":
+        # 2주 간격: 시작일의 월초부터 14일 간격
+        dates = []
+        current = start_dt.replace(day=1)
+        while current <= end_dt:
+            dates.append(current.strftime("%Y-%m-%d"))
+            current += timedelta(days=14)
+        return dates
 
     dates = []
     current = start_dt.replace(day=1)
@@ -241,6 +252,22 @@ def run_live():
                             _stock_names[code] = krx.get_market_ticker_name(code)
                         except Exception:
                             _stock_names[code] = ""
+
+                # 종목풀 JSON 저장 (대시보드용)
+                import json
+                pool_data = [
+                    {"code": c, "name": _stock_names.get(c, ""), "score": round(pool.scores.get(c, 0), 4)}
+                    for c in pool.codes
+                ]
+                pool_json = {
+                    "date": today,
+                    "count": len(pool.codes),
+                    "entered": pool.entered,
+                    "exited": pool.exited,
+                    "stocks": pool_data,
+                }
+                Path("data").mkdir(exist_ok=True)
+                Path("data/current_pool.json").write_text(json.dumps(pool_json, ensure_ascii=False, indent=2))
 
                 logger.info(f"종목풀 업데이트: {len(pool.codes)}종목 (신규 {len(pool.entered)}, 퇴출 {len(pool.exited)})")
                 notifier.notify_start()  # 종목풀 갱신 알림
@@ -503,12 +530,12 @@ def run_live():
         hour=int(config.schedule.post_market.split(":")[0]),
         minute=int(config.schedule.post_market.split(":")[1]),
     )
-    # 매월 리밸런싱 (장 시작 전)
+    # 2주 간격 리밸런싱 (장 시작 전)
     pre_h, pre_m = config.schedule.pre_market.split(":")
     scheduler.add_job(
-        rebalance_pool, "cron",
-        day=config.schedule.rebalance_day,
-        hour=int(pre_h), minute=int(pre_m),
+        rebalance_pool, "interval",
+        weeks=2,
+        start_date=datetime.now().replace(hour=int(pre_h), minute=int(pre_m), second=0),
     )
 
     # 매주 토요일 새벽 모델 재학습

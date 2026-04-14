@@ -50,6 +50,10 @@ class RiskManager:
 
         return True
 
+    @property
+    def kill_switch_active(self) -> bool:
+        return self._kill_switch
+
     def activate_kill_switch(self, reason: str = "") -> None:
         """비상 정지를 활성화합니다."""
         self._kill_switch = True

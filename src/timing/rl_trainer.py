@@ -24,7 +24,7 @@ def evaluate_rl_agent(
     commission_rate: float = 0.00015,
     tax_rate: float = 0.0023,
 ) -> dict:
-    """RL 에이전트의 성능을 평가합니다."""
+    """RL 에이전트의 성능을 평가합니다 (결정적 정책 사용)."""
     env = TradingEnv(commission_rate=commission_rate, tax_rate=tax_rate)
     episode_returns = []
     episode_trades = []
@@ -35,7 +35,7 @@ def evaluate_rl_agent(
             continue
 
         try:
-            result = agent.collect_episode(env, df)
+            result = agent.collect_episode(env, df, deterministic=True)
             episode_returns.append(result["portfolio_value"] - 1.0)
             episode_trades.append(result.get("n_trades", 0))
         except Exception:

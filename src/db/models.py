@@ -74,6 +74,35 @@ class PositionLog(Base):
     created_at = Column(DateTime, default=datetime.now)
 
 
+class SignalLog(Base):
+    """시그널 이력 (LLM 검증 결과 포함)"""
+    __tablename__ = "signal_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code = Column(String(10), nullable=False, index=True)
+    stock_name = Column(String(50), default="")
+    signal = Column(String(4), nullable=False)          # BUY / SELL
+    decision = Column(String(10), nullable=False)        # 확정 / 보류
+    reason = Column(String(1000), default="")
+    signal_type = Column(String(10), default="llm")      # llm / summary
+    created_at = Column(DateTime, default=datetime.now, index=True)
+
+
+class RuntimeStatus(Base):
+    """대시보드용 런타임 상태 스냅샷"""
+    __tablename__ = "runtime_status"
+
+    id = Column(Integer, primary_key=True, autoincrement=False)
+    strategy = Column(String(50), default="")
+    pool_size = Column(Integer, default=0)
+    llm_enabled = Column(Boolean, default=False)
+    kill_switch = Column(Boolean, default=False)
+    check_interval = Column(Integer, default=0)
+    daily_loss_limit = Column(Float, default=0.0)
+    max_positions = Column(Integer, default=0)
+    updated_at = Column(DateTime, default=datetime.now)
+
+
 # ──────────────────────────────────────────────
 # 데이터베이스 초기화
 # ──────────────────────────────────────────────
@@ -85,6 +114,9 @@ def init_db(db_path: str = "data/trading.db") -> None:
     """데이터베이스를 초기화합니다."""
     global _engine, _SessionFactory
 
+    if _engine is not None:
+        return
+
     Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     _engine = create_engine(f"sqlite:///{db_path}", echo=False)
 
@@ -95,7 +127,7 @@ def init_db(db_path: str = "data/trading.db") -> None:
         cursor.execute("PRAGMA journal_mode=WAL")
         cursor.close()
 
-    Base.metadata.create_all(_engine)
+    Base.metadata.create_all(_engine, checkfirst=True)
     _SessionFactory = sessionmaker(bind=_engine)
 
 
@@ -201,5 +233,91 @@ def get_today_trades() -> list[TradeLog]:
             .all()
         )
         return trades
+    finally:
+        session.close()
+
+
+def save_runtime_status(
+    strategy: str,
+    pool_size: int,
+    llm_enabled: bool,
+    kill_switch: bool,
+    check_interval: int,
+    daily_loss_limit: float,
+    max_positions: int,
+) -> RuntimeStatus:
+    """대시보드용 런타임 상태를 저장합니다."""
+    session = get_session()
+    try:
+        status = session.get(RuntimeStatus, 1)
+        if status is None:
+            status = RuntimeStatus(id=1)
+            session.add(status)
+
+        status.strategy = strategy
+        status.pool_size = pool_size
+        status.llm_enabled = llm_enabled
+        status.kill_switch = kill_switch
+        status.check_interval = check_interval
+        status.daily_loss_limit = daily_loss_limit
+        status.max_positions = max_positions
+        status.updated_at = datetime.now()
+
+        session.commit()
+        session.refresh(status)
+        return status
+    finally:
+        session.close()
+
+
+def get_runtime_status() -> RuntimeStatus | None:
+    """가장 최근 런타임 상태를 조회합니다."""
+    session = get_session()
+    try:
+        return session.get(RuntimeStatus, 1)
+    finally:
+        session.close()
+
+
+def save_signal_log(
+    stock_code: str,
+    stock_name: str,
+    signal: str,
+    decision: str,
+    reason: str = "",
+    signal_type: str = "llm",
+) -> SignalLog:
+    """시그널 이력을 기록합니다."""
+    session = get_session()
+    try:
+        log = SignalLog(
+            stock_code=stock_code,
+            stock_name=stock_name,
+            signal=signal,
+            decision=decision,
+            reason=reason[:1000],
+            signal_type=signal_type,
+        )
+        session.add(log)
+        session.commit()
+        session.refresh(log)
+        return log
+    finally:
+        session.close()
+
+
+def get_recent_signals(limit: int = 100, days: int = 7) -> list[SignalLog]:
+    """최근 N일 이내의 시그널 이력을 조회합니다."""
+    from datetime import timedelta
+    session = get_session()
+    try:
+        cutoff = datetime.now() - timedelta(days=days)
+        return (
+            session.query(SignalLog)
+            .filter(SignalLog.created_at >= cutoff)
+            .order_by(SignalLog.created_at.desc())
+            .limit(limit)
+            .all()
+        )
     finally:
         session.close()

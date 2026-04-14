@@ -21,8 +21,10 @@ from flask import Flask, jsonify, render_template
 from src.config import load_config, get_config, get_secrets
 from src.broker.kis_client import KISClient
 from src.broker.account import AccountManager
+from src.db.models import init_db, get_runtime_status, get_recent_signals
 
 load_config("config/settings.yaml")
+init_db(get_config().database.path)
 
 app = Flask(__name__)
 
@@ -85,18 +87,31 @@ def api_status():
         # 수익률순 정렬
         positions.sort(key=lambda x: x["pnl_pct"], reverse=True)
 
+        initial_capital = (s.total_eval - s.asset_change) if s.asset_change is not None else 10_000_000
+
+        # 실현손익 조회
+        realized = acct.get_realized_pnl()
+
         return jsonify({
             "ok": True,
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "summary": {
                 "total_eval": s.total_eval,
                 "total_deposit": s.total_deposit,
-                "total_pnl": s.total_pnl,
-                "total_pnl_pct": round(s.total_pnl_pct, 2),
+                "available_cash": s.available_cash,
+                "total_pnl": s.asset_change,
+                "total_pnl_pct": round(s.asset_change_pct, 2),
                 "total_invested": total_invested,
                 "num_positions": len(s.positions),
-                "initial_capital": 10_000_000,
-                "total_return_pct": round((s.total_eval / 10_000_000 - 1) * 100, 2),
+                "initial_capital": initial_capital,
+                "total_return_pct": round(s.asset_change_pct, 2),
+                "asset_change": s.asset_change,
+                "asset_change_pct": round(s.asset_change_pct, 2),
+                "realized_pnl": realized["realized_pnl"],
+                "unrealized_pnl": s.total_pnl,
+                "total_sell": realized["total_sell"],
+                "total_buy": realized["total_buy"],
+                "n_trades": realized["n_trades"],
             },
             "positions": positions,
         })
@@ -109,22 +124,21 @@ def api_pipeline():
     """파이프라인 상태 API"""
     try:
         config = get_config()
-        # Kill Switch 상태는 로그에서 확인
-        log_path = Path("logs/supertrader.log")
-        kill_switch = False
-        if log_path.exists():
-            text = log_path.read_text(encoding="utf-8", errors="ignore")[-5000:]
-            kill_switch = "KILL SWITCH" in text and "Kill switch" not in text.split("KILL SWITCH")[-1]
+        runtime = get_runtime_status()
 
         return jsonify({
             "ok": True,
-            "strategy": config.strategy.name,
-            "pool_size": config.factors.top_n,
-            "llm_enabled": bool(get_secrets().anthropic_api_key),
-            "kill_switch": kill_switch,
-            "check_interval": config.schedule.check_interval_sec,
-            "daily_loss_limit": config.risk.daily_loss_limit_pct * 100,
-            "max_positions": config.risk.max_total_positions,
+            "strategy": runtime.strategy if runtime else config.strategy.name,
+            "pool_size": runtime.pool_size if runtime else config.factors.top_n,
+            "llm_enabled": runtime.llm_enabled if runtime else bool(get_secrets().anthropic_api_key),
+            "kill_switch": runtime.kill_switch if runtime else False,
+            "check_interval": runtime.check_interval if runtime else config.schedule.check_interval_sec,
+            "daily_loss_limit": runtime.daily_loss_limit if runtime else config.risk.daily_loss_limit_pct * 100,
+            "max_positions": runtime.max_positions if runtime else config.risk.max_total_positions,
+            "updated_at": (
+                runtime.updated_at.strftime("%Y-%m-%d %H:%M:%S")
+                if runtime and runtime.updated_at else None
+            ),
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -132,115 +146,118 @@ def api_pipeline():
 
 @app.route("/api/signals")
 def api_signals():
-    """최근 시그널 로그 API — 로그 파일에서 LLM 검증 결과 파싱"""
+    """최근 시그널 이력 API — DB 우선, 로그 fallback"""
     try:
-        log_path = Path("logs/supertrader.log")
-        if not log_path.exists():
-            return jsonify({"ok": True, "signals": []})
+        from flask import request
+        days = int(request.args.get("days", 7))
+        limit = int(request.args.get("limit", 100))
+        days = min(max(days, 1), 90)
+        limit = min(max(limit, 1), 500)
 
-        # Windows Python이 CP949로 로그를 쓸 수 있으므로 여러 인코딩 시도
-        for enc in ("utf-8", "cp949", "euc-kr"):
-            try:
-                text = log_path.read_text(encoding=enc)
-                break
-            except (UnicodeDecodeError, LookupError):
-                continue
-        else:
-            text = log_path.read_text(encoding="utf-8", errors="ignore")
-        lines = text.strip().split("\n")
-
-        signals = []
-        # LLM 검증 로그 패턴: "LLM 검증 [종목명] SIGNAL: 확정/보류 — 이유"
-        # 종목명이 빈 경우도 허용
-        llm_pattern = re.compile(
-            r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ \| INFO .+LLM .+ \[(.*?)\] (BUY|SELL): (\S+) . (.+)"
-        )
-        # LLM 보류 로그 패턴
-        reject_pattern = re.compile(
-            r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ \| INFO .+LLM 보류: (.+?) (BUY|SELL) . (.+)"
-        )
-        # 시그널 체크 요약 패턴: "시그널 체크 완료: 30종목 — BUY:0 SELL:0 HOLD:30 오류:0"
-        summary_pattern = re.compile(
-            r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ \| INFO .+시그널 체크 완료: (\d+)종목 . BUY:(\d+) SELL:(\d+) HOLD:(\d+) 오류:(\d+)"
-        )
-
-        def parse_stock_field(s: str) -> tuple[str, str]:
-            """'code|name', 'code', 또는 'name' 형식 파싱 → (code, name)"""
-            if not s:
-                return "", "-"
-            s = s.strip()
-            # 'code|name' 형식
-            if "|" in s:
-                code, name = s.split("|", 1)
-                code = code.strip()
-                name = name.strip()
-                if code.isdigit() and len(code) == 6 and not name or name == "-":
-                    name = _lookup_stock_name(code) or "-"
-                return code, name or "-"
-            # 6자리 숫자 → stock_code (이름 조회)
-            if s.isdigit() and len(s) == 6:
-                name = _lookup_stock_name(s) or "-"
-                return s, name
-            # 그 외 → stock_name only
-            return "", s
-
-        for line in reversed(lines):
-            # LLM 검증 확정
-            m = llm_pattern.search(line)
-            if m:
-                ts, stock, signal, decision, reason = m.groups()
-                code, name = parse_stock_field(stock)
-                confirmed = "확정" in decision or "Confirmed" in decision or "보류" not in decision
+        # DB에서 조회
+        rows = get_recent_signals(limit=limit, days=days)
+        if rows:
+            signals = []
+            for r in rows:
                 signals.append({
-                    "time": ts,
-                    "stock_code": code,
-                    "stock_name": name,
-                    "signal": signal,
-                    "decision": "확정" if confirmed else "보류",
-                    "reason": reason[:100],
-                    "type": "llm",
+                    "time": r.created_at.strftime("%Y-%m-%d %H:%M:%S") if r.created_at else "",
+                    "stock_code": r.stock_code or "",
+                    "stock_name": r.stock_name or "-",
+                    "signal": r.signal,
+                    "decision": r.decision,
+                    "reason": r.reason if r.reason else "",
+                    "type": r.signal_type or "llm",
                 })
-                if len(signals) >= 30:
-                    break
-                continue
+            return jsonify({"ok": True, "signals": signals, "source": "db"})
 
-            # LLM 보류
-            m = reject_pattern.search(line)
-            if m:
-                ts, stock, signal, reason = m.groups()
-                code, name = parse_stock_field(stock)
-                signals.append({
-                    "time": ts,
-                    "stock_code": code,
-                    "stock_name": name,
-                    "signal": signal,
-                    "decision": "보류",
-                    "reason": reason[:100],
-                    "type": "llm",
-                })
-                if len(signals) >= 30:
-                    break
-                continue
-
-            # 시그널 체크 요약
-            m = summary_pattern.search(line)
-            if m:
-                ts, total, buy, sell, hold, err = m.groups()
-                signals.append({
-                    "time": ts,
-                    "stock_code": "",
-                    "stock_name": f"{total}종목 스캔",
-                    "signal": "SCAN",
-                    "decision": f"B:{buy} S:{sell} H:{hold}",
-                    "reason": f"오류: {err}" if int(err) > 0 else "정상",
-                    "type": "summary",
-                })
-                if len(signals) >= 30:
-                    break
-
-        return jsonify({"ok": True, "signals": signals})
+        # DB에 데이터 없으면 로그 파일 fallback
+        signals = _parse_signals_from_log(limit=limit)
+        return jsonify({"ok": True, "signals": signals, "source": "log"})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+def _parse_signals_from_log(limit: int = 100) -> list[dict]:
+    """로그 파일에서 시그널을 파싱합니다 (DB 없을 때 fallback)."""
+    log_path = Path("logs/supertrader.log")
+    if not log_path.exists():
+        return []
+
+    for enc in ("utf-8", "cp949", "euc-kr"):
+        try:
+            text = log_path.read_text(encoding=enc)
+            break
+        except (UnicodeDecodeError, LookupError):
+            continue
+    else:
+        text = log_path.read_text(encoding="utf-8", errors="ignore")
+    lines = text.strip().split("\n")
+
+    signals = []
+    llm_pattern = re.compile(
+        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ \| INFO .+LLM .+ \[(.*?)\] (BUY|SELL): (\S+) . (.+)"
+    )
+    reject_pattern = re.compile(
+        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ \| INFO .+LLM 보류: (.+?) (BUY|SELL) . (.+)"
+    )
+    summary_pattern = re.compile(
+        r"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\.\d+ \| INFO .+시그널 체크 완료: (\d+)종목 . BUY:(\d+) SELL:(\d+) HOLD:(\d+) 오류:(\d+)"
+    )
+
+    def parse_stock_field(s: str) -> tuple[str, str]:
+        if not s:
+            return "", "-"
+        s = s.strip()
+        if "|" in s:
+            code, name = s.split("|", 1)
+            code, name = code.strip(), name.strip()
+            if code.isdigit() and len(code) == 6 and (not name or name == "-"):
+                name = _lookup_stock_name(code) or "-"
+            return code, name or "-"
+        if s.isdigit() and len(s) == 6:
+            return s, _lookup_stock_name(s) or "-"
+        return "", s
+
+    for line in reversed(lines):
+        m = llm_pattern.search(line)
+        if m:
+            ts, stock, signal, decision, reason = m.groups()
+            code, name = parse_stock_field(stock)
+            confirmed = "확정" in decision or "Confirmed" in decision or "보류" not in decision
+            signals.append({
+                "time": ts, "stock_code": code, "stock_name": name,
+                "signal": signal, "decision": "확정" if confirmed else "보류",
+                "reason": reason, "type": "llm",
+            })
+            if len(signals) >= limit:
+                break
+            continue
+
+        m = reject_pattern.search(line)
+        if m:
+            ts, stock, signal, reason = m.groups()
+            code, name = parse_stock_field(stock)
+            signals.append({
+                "time": ts, "stock_code": code, "stock_name": name,
+                "signal": signal, "decision": "보류",
+                "reason": reason, "type": "llm",
+            })
+            if len(signals) >= limit:
+                break
+            continue
+
+        m = summary_pattern.search(line)
+        if m:
+            ts, total, buy, sell, hold, err = m.groups()
+            signals.append({
+                "time": ts, "stock_code": "", "stock_name": f"{total}종목 스캔",
+                "signal": "SCAN", "decision": f"B:{buy} S:{sell} H:{hold}",
+                "reason": f"오류: {err}" if int(err) > 0 else "정상", "type": "summary",
+            })
+            if len(signals) >= limit:
+                break
+
+    return signals
 
 
 @app.route("/api/feedback")
@@ -306,6 +323,35 @@ def api_returns():
             "total_pnl_pct": total_pnl_pct,
             "cumulative_return": cumulative_return,
         })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/pool")
+def api_pool():
+    """현재 팩터 종목풀 API"""
+    try:
+        import json
+        pool_path = Path("data/current_pool.json")
+        if not pool_path.exists():
+            return jsonify({"ok": True, "stocks": [], "date": None, "count": 0})
+
+        raw = pool_path.read_bytes()
+        for enc in ("utf-8", "cp949", "euc-kr"):
+            try:
+                text = raw.decode(enc)
+                break
+            except (UnicodeDecodeError, LookupError):
+                continue
+        else:
+            text = raw.decode("utf-8", errors="ignore")
+
+        data = json.loads(text)
+        # 종목명이 비어있으면 pykrx로 보충
+        for s in data.get("stocks", []):
+            if not s.get("name"):
+                s["name"] = _lookup_stock_name(s["code"])
+        return jsonify({"ok": True, **data})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 

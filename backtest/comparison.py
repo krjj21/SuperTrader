@@ -20,6 +20,7 @@ def run_strategy_comparison(
     pool_history: dict[str, list[str]],
     rebalance_dates: list[str],
     model_paths: dict[str, str] | None = None,
+    only_strategies: list[str] | None = None,
 ) -> pd.DataFrame:
     """여러 전략을 동일 조건에서 비교합니다.
 
@@ -56,6 +57,10 @@ def run_strategy_comparison(
         strategies["factor_rl"] = FactorRLStrategy(
             model_path=model_paths["rl"],
         )
+
+    # 특정 전략만 실행
+    if only_strategies:
+        strategies = {k: v for k, v in strategies.items() if k in only_strategies}
 
     results = {}
     equity_curves = {}

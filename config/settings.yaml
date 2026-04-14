@@ -17,7 +17,7 @@ universe:
 
 # ── 팩터 설정 ──
 factors:
-  rebalance_freq: "monthly"       # monthly, quarterly
+  rebalance_freq: "biweekly"      # biweekly, monthly, quarterly
   top_n: 30                       # 종목풀 크기
   composite_method: "ic_weighted" # equal, ic_weighted
   ic_lookback: 12                 # IC 계산 lookback (개월)
@@ -89,6 +89,8 @@ timing:
     epochs_per_update: 4
     episodes: 200            # 100 → 200 (충분한 학습)
     hidden_dim: 256
+    buy_action_threshold: 0.13   # P(BUY) > 13% → 매수 (모델 평균 수준)
+    sell_action_threshold: 0.06  # P(SELL) > 6% → 매도 (모델 평균 수준)
 
 # ── 전략 파라미터 ──
 strategy:

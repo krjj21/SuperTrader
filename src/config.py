@@ -47,7 +47,7 @@ class UniverseConfig(BaseModel):
 
 
 class FactorConfig(BaseModel):
-    rebalance_freq: str = "monthly"
+    rebalance_freq: str = "biweekly"  # biweekly, monthly, quarterly
     top_n: int = 30
     composite_method: str = "ic_weighted"
     ic_lookback: int = 12
@@ -108,10 +108,12 @@ class RLParams(BaseModel):
     group_size: int = 8
     clip_epsilon_low: float = 0.2
     clip_epsilon_high: float = 0.28
-    entropy_coeff: float = 0.01
+    entropy_coeff: float = 0.03
     epochs_per_update: int = 4
-    episodes: int = 50
+    episodes: int = 200
     hidden_dim: int = 256
+    buy_action_threshold: float = 0.08
+    sell_action_threshold: float = 0.05
 
 
 class TimingConfig(BaseModel):
@@ -147,7 +149,7 @@ class StrategyConfig(BaseModel):
 class RiskConfig(BaseModel):
     max_position_pct: float = 0.05
     max_total_positions: int = 30
-    daily_loss_limit_pct: float = 0.03
+    daily_loss_limit_pct: float = 0.05
     stop_loss_pct: float = 0.07
     max_order_retries: int = 3
 
@@ -197,12 +199,15 @@ class AppConfig(BaseModel):
 # 설정 로더
 # ──────────────────────────────────────────────
 def load_config(config_path: str = "config/settings.yaml") -> AppConfig:
+    global _config
     path = Path(config_path)
     if path.exists():
         with open(path, "r", encoding="utf-8") as f:
             raw: dict[str, Any] = yaml.safe_load(f) or {}
-        return AppConfig(**raw)
-    return AppConfig()
+        _config = AppConfig(**raw)
+    else:
+        _config = AppConfig()
+    return _config
 
 
 def load_secrets() -> Secrets:

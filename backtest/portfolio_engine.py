@@ -170,7 +170,8 @@ class PortfolioBacktestEngine:
             백테스트 결과 딕셔너리
         """
         # ── 전처리: 날짜 변환 1회, 가격 캐시, 날짜 인덱스 구축 ──
-        price_cache: dict[str, dict[str, float]] = {}
+        close_cache: dict[str, dict[str, float]] = {}
+        open_cache: dict[str, dict[str, float]] = {}
         date_lists: dict[str, list[str]] = {}
         all_dates = set()
 
@@ -180,16 +181,38 @@ class PortfolioBacktestEngine:
                 df["date_str"] = date_strs
                 all_dates.update(date_strs)
                 date_lists[code] = date_strs
-                price_cache[code] = dict(zip(date_strs, df["close"].astype(float)))
+                close_cache[code] = dict(zip(date_strs, df["close"].astype(float)))
+                if "open" in df.columns:
+                    open_cache[code] = dict(zip(date_strs, df["open"].astype(float)))
 
         all_dates = sorted(all_dates)
-        self._price_cache = price_cache
+        self._close_cache = close_cache
+        self._open_cache = open_cache
 
         rebalance_set = set(rebalance_dates)
         current_pool = []
 
-        for date in all_dates:
-            # 리밸런싱일: 종목풀 업데이트
+        # T일 시그널 → T+1일 시가 체결을 위한 주문 큐
+        pending_orders: list[tuple[str, str, str]] = []  # (code, name, side)
+
+        for i, date in enumerate(all_dates):
+            # ── 1. 전일 시그널의 주문을 당일 시가로 체결 ──
+            if pending_orders:
+                stopped_by_pending: set[str] = set()
+                for code, name, side in pending_orders:
+                    exec_price = self._get_open_cached(code, date)
+                    if exec_price <= 0:
+                        continue
+                    if side == "buy":
+                        if code not in self.positions and len(self.positions) < self.max_positions:
+                            self._buy(code, name, exec_price, date)
+                    elif side == "sell":
+                        if code in self.positions:
+                            self._sell(code, exec_price, date)
+                            stopped_by_pending.add(code)
+                pending_orders = []
+
+            # ── 2. 리밸런싱일: 종목풀 업데이트 → T+1 체결 예약 ──
             if date in rebalance_set and date in pool_history:
                 new_pool = pool_history[date]
 
@@ -197,41 +220,34 @@ class PortfolioBacktestEngine:
                     strategy.update_pool(new_pool)
 
                 if hasattr(strategy, "commit_pool"):
-                    # factor_only: 종목풀 변경 시 매매
                     old_set = set(current_pool)
                     new_set = set(new_pool)
 
-                    # 퇴출 종목 매도
                     for code in old_set - new_set:
                         if code in self.positions:
-                            price = self._get_price_cached(code, date)
-                            if price > 0:
-                                self._sell(code, price, date)
+                            pending_orders.append((code, "", "sell"))
 
-                    # 신규 편입 종목 매수
                     for code in new_set - old_set:
-                        price = self._get_price_cached(code, date)
-                        if price > 0:
-                            self._buy(code, "", price, date)
+                        pending_orders.append((code, "", "buy"))
 
                     strategy.commit_pool()
 
                 current_pool = new_pool
 
-            # ── 손절 체크: 당일 종가 기준 pnl_pct ≤ -stop_loss_pct 이면 강제 매도 ──
+            # ── 3. 손절 체크: T일 종가 기준 판단 → T+1 체결 예약 ──
             stop_loss_threshold = -self.stop_loss_pct
             stopped_today: set[str] = set()
             for code in list(self.positions.keys()):
-                price = self._get_price_cached(code, date)
-                if price <= 0:
+                close_price = self._get_close_cached(code, date)
+                if close_price <= 0:
                     continue
                 pos = self.positions[code]
-                pnl_pct = price / pos.avg_price - 1
+                pnl_pct = close_price / pos.avg_price - 1
                 if pnl_pct <= stop_loss_threshold:
-                    self._sell(code, price, date)
+                    pending_orders.append((code, pos.name, "sell"))
                     stopped_today.add(code)
 
-            # 일일 타이밍 시그널 (종목풀 내 종목)
+            # ── 4. 일일 타이밍 시그널: T일 데이터로 판단 → T+1 체결 예약 ──
             for code in current_pool:
                 if code not in ohlcv_dict:
                     continue
@@ -249,25 +265,21 @@ class PortfolioBacktestEngine:
 
                 if signal.signal == Signal.BUY and code not in self.positions:
                     if code in stopped_today:
-                        continue  # 같은 날 재매수 방지
-                    price = self._get_price_cached(code, date)
-                    if price > 0 and len(self.positions) < self.max_positions:
-                        self._buy(code, signal.stock_name, price, date)
+                        continue
+                    pending_orders.append((code, signal.stock_name, "buy"))
 
                 elif signal.signal == Signal.SELL and code in self.positions:
-                    price = self._get_price_cached(code, date)
-                    if price > 0:
-                        self._sell(code, price, date)
+                    pending_orders.append((code, "", "sell"))
 
-            # 전략-엔진 포지션 동기화 (RL 전략 등)
+            # ── 5. 전략-엔진 포지션 동기화 (RL 전략 등) ──
             if hasattr(strategy, "sync_positions"):
                 held = set(self.positions.keys())
-                prices = {c: self._get_price_cached(c, date) for c in held}
+                prices = {c: self._get_close_cached(c, date) for c in held}
                 strategy.sync_positions(held, prices)
 
-            # 일일 포트폴리오 가치 기록
+            # ── 6. 일일 포트폴리오 가치 기록 (종가 기준) ──
             prices = {
-                code: self._get_price_cached(code, date)
+                code: self._get_close_cached(code, date)
                 for code in self.positions
             }
             portfolio_value = self._get_portfolio_value(prices)
@@ -280,12 +292,21 @@ class PortfolioBacktestEngine:
 
         return self._compile_results()
 
-    def _get_price_cached(self, code: str, date: str) -> float:
-        """캐시에서 O(1) 가격 조회"""
-        cache = self._price_cache.get(code)
+    def _get_close_cached(self, code: str, date: str) -> float:
+        """종가 캐시에서 O(1) 조회"""
+        cache = self._close_cache.get(code)
         if cache:
             return cache.get(date, 0.0)
         return 0.0
+
+    def _get_open_cached(self, code: str, date: str) -> float:
+        """시가 캐시에서 O(1) 조회 (없으면 종가 fallback)"""
+        cache = self._open_cache.get(code)
+        if cache:
+            price = cache.get(date, 0.0)
+            if price > 0:
+                return price
+        return self._get_close_cached(code, date)
 
     def _compile_results(self) -> dict:
         equity_df = pd.DataFrame(self.equity_history)

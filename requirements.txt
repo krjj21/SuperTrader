@@ -38,6 +38,13 @@ apscheduler>=3.10.0
 
 # === Notification ===
 slack-sdk>=3.21.0
+notion-client>=2.2.0
+
+# === LLM Validation ===
+anthropic>=0.39.0
+
+# === Web Dashboard ===
+flask>=3.0.0
 
 # === Visualization ===
 matplotlib>=3.7.0

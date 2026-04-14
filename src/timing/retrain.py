@@ -27,19 +27,18 @@ def evaluate_model(model, X_val: pd.DataFrame, y_val: pd.Series) -> dict:
     if mask.sum() < 50:
         return {"error": "insufficient_val_data"}
 
-    X_clean = X_val[mask]
-    y_clean = y_val[mask]
+    X_clean = X_val[mask].reset_index(drop=True)
+    y_clean = y_val[mask].reset_index(drop=True)
 
     predictions = model.predict(X_clean)
-    pred_clean = predictions[mask]
 
-    accuracy = accuracy_score(y_clean, pred_clean)
-    f1 = f1_score(y_clean, pred_clean, average="weighted", zero_division=0)
+    accuracy = accuracy_score(y_clean, predictions)
+    f1 = f1_score(y_clean, predictions, average="weighted", zero_division=0)
 
     # 시그널 분포
-    n_buy = (pred_clean == 1).sum()
-    n_sell = (pred_clean == -1).sum()
-    n_hold = (pred_clean == 0).sum()
+    n_buy = (predictions == 1).sum()
+    n_sell = (predictions == -1).sum()
+    n_hold = (predictions == 0).sum()
 
     return {
         "accuracy": accuracy,

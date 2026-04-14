@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Run backtest (compares all strategies: factor_only, factor_macd, factor_kdj, factor_decision_tree, factor_xgboost)
+# Run backtest (compares 6 strategies: factor_only, factor_macd, factor_kdj, factor_decision_tree, factor_xgboost, factor_rl)
 python main.py backtest
 
 # Run live trading (requires KIS API keys in config/.env)
@@ -20,6 +20,9 @@ python main.py retrain --model xgboost
 # Check virtual trading account status
 python main.py status
 
+# Run specific strategy only (faster)
+python main.py backtest --strategy factor_rl
+
 # Custom config file
 python main.py backtest --config config/settings.yaml
 
@@ -33,8 +36,8 @@ No test suite exists yet (`tests/` directory is empty).
 
 SuperTrader is a Korean stock (KOSPI/KOSDAQ) trading system that combines **factor-based stock selection** with **ML-based timing signals** and **LLM-based signal validation**.
 
-### Five execution modes
-- **backtest**: Runs 5 strategies on historical data, outputs comparison table
+### Six execution modes
+- **backtest**: Runs 6 strategies on historical data, outputs comparison table
 - **live**: Scheduled auto-trading via KIS broker API with risk management
 - **train**: Trains ML timing models on historical OHLCV data
 - **retrain**: Retrains with latest data, replaces model only if F1 improves
@@ -45,7 +48,7 @@ SuperTrader is a Korean stock (KOSPI/KOSDAQ) trading system that combines **fact
 ```
 startup: build_stock_pool() → 30 stocks via factor scoring
     ↓
-every 5 min: XGBoost generate_signal() → BUY/SELL/HOLD
+every 5 min: RL (PPO) generate_signal() → BUY/SELL/HOLD
     ↓
 LLM validation (Claude Haiku) → confirm or reject signal
     ↓
@@ -53,7 +56,7 @@ if confirmed: RiskManager validates → OrderManager executes via KIS API
     ↓
 monthly: rebalance_pool() re-selects top 30 stocks
     ↓
-weekly (Saturday): retrain XGBoost if new model beats old F1
+weekly (Saturday): retrain model if new one beats old F1/Sharpe
 ```
 
 ### Data Pipeline (backtest mode)
@@ -91,7 +94,7 @@ All strategies inherit `BaseStrategy` (in `base.py`) and implement `generate_sig
 - **trainer.py**: Training pipeline, dispatches to model-specific modules
 - **predictor.py**: Unified inference interface — `TimingPredictor(model_type, model_path).predict(df) → 1/0/-1`
 - **retrain.py**: Auto-retraining — trains new model, compares F1/accuracy against existing, replaces only if improved, backs up old model
-- **llm_validator.py**: LLM signal validation — sends ML signal + technical context to Claude Haiku, confirms or rejects based on RSI/MA/volume analysis
+- **llm_validator.py**: LLM signal validation — sends ML signal + technical context to Claude Haiku (configurable model), confirms or rejects based on RSI/MA/volume analysis
 - Model implementations: `decision_tree.py`, `gradient_boost.py` (XGBoost/LightGBM), `lstm_model.py`, `transformer_model.py`
 - **rl_env.py**: Trading Gym environment — State(30 features + 3 position) / Action(BUY/HOLD/SELL) / Reward: Differential Sharpe Ratio + drawdown penalty + transaction cost. Log-return 기반 risk-adjusted reward
 - **rl_agent.py**: PPO Actor-Critic (shared backbone + LayerNorm) + GAE (λ=0.95) + mini-batch update. Legacy GRPO 모델 자동 변환 로드 지원
@@ -108,7 +111,7 @@ Current XGBoost hyperparameters (tuned to prevent overfitting): max_depth=4, reg
 2. Daily: calls `strategy.generate_signal()` for each stock in pool
 3. Tracks positions, cash, equity curve with commission (0.015%) and tax (0.23%)
 
-**Performance bottleneck**: The inner loop does `df[df["date"].astype(str) <= date]` and `df[df["date"].astype(str) == date]` on every iteration — O(n) string conversion per lookup. MACD/KDJ/ML strategies take 30-60 min each for 7-year backtests.
+**Performance**: Engine pre-builds date→price dict caches and uses `bisect` + O(1) dict lookup for price retrieval. Date strings are converted once during initialization. MACD/KDJ/ML strategies still take ~30 min each for 7-year backtests due to `generate_signal()` per stock per day.
 
 ### Configuration (`src/config.py`)
 
@@ -131,7 +134,7 @@ In live mode, `build_stock_pool()` runs at startup and monthly via APScheduler c
 
 ### Database (`src/db/`)
 
-SQLAlchemy ORM with SQLite. `init_db(path)` creates tables. Models: `TradeLog`, `DailyPnL`, `Position`. `save_daily_pnl()` records daily P&L snapshots for historical tracking.
+SQLAlchemy ORM with SQLite. `init_db(path)` creates tables (guarded against duplicate calls). Models: `TradeLog`, `DailyPnL`, `PositionLog`, `SignalLog`, `RuntimeStatus`. `save_signal_log()` records LLM validation results; `get_recent_signals(limit, days)` queries them for the web dashboard. `save_runtime_status()` writes a singleton row for live pipeline state.
 
 ### Web Dashboard (`web/`)
 
@@ -145,9 +148,10 @@ Flask app (`web/app.py`) for real-time account monitoring. Run separately from m
 ### Live Trading (`src/broker/`, `src/risk/`, `src/notification/`)
 
 - **kis_client.py**: Korean Investment & Securities REST API (supports virtual/real via `is_virtual` config). Rate limited to 10 calls/sec with auto-retry.
-- **order.py** / **account.py**: Order execution and balance queries. Virtual/real trading uses different tr_id prefixes (VTTC vs TTTC).
-- **risk/manager.py**: Position sizing (5% per stock, ATR-based), daily loss limit (-3%), stop loss (-7%), kill switch (3 consecutive errors)
+- **order.py** / **account.py**: Order execution and balance queries. Virtual/real trading uses different tr_id prefixes (VTTC vs TTTC). `AccountSummary` has both `total_deposit` (D+2 settled cash) and `available_cash` (order-ready amount including unsettled sell proceeds).
+- **risk/manager.py**: Position sizing (5% per stock, ATR-based), daily loss limit (-5%), stop loss (-7%), kill switch (3 consecutive errors). Kill switch monitors all scheduled jobs (signal check, rebalance, retrain).
 - **notification/slack_bot.py**: Trade alerts and daily reports
+- **notification/notion_reporter.py**: Daily trading log to Notion database (positions table, trade list, AI feedback)
 
 ### Live Trading Schedules (APScheduler)
 
@@ -155,6 +159,14 @@ Flask app (`web/app.py`) for real-time account monitoring. Run separately from m
 - **Daily report**: cron at post_market (15:40)
 - **Monthly rebalance**: cron on rebalance_day (1st) at pre_market (08:30)
 - **Weekly retrain**: cron on Saturday at 06:00
+
+### RL Action Thresholds
+
+The RL model outputs action probabilities P(HOLD), P(BUY), P(SELL). Configurable thresholds in `config/settings.yaml` → `timing.rl`:
+- `buy_action_threshold: 0.08` — P(BUY) > 8% triggers BUY (model avg ~13%)
+- `sell_action_threshold: 0.05` — P(SELL) > 5% triggers SELL (model avg ~6%)
+
+These flow through `factor_rl.py` → `predictor.py` → `rl_agent.py`. Live trading calls `sync_positions()` each cycle to pass actual holdings to the RL strategy so it can generate SELL signals for held stocks.
 
 ### Key Design Decisions
 
@@ -166,5 +178,5 @@ Flask app (`web/app.py`) for real-time account monitoring. Run separately from m
 ### Environment Gotchas
 
 - **WSL + Windows venv**: The project uses a Windows Python venv from WSL. Always use `/mnt/e/SuperTrader/venv/Scripts/python.exe`, not a Linux python.
-- **Missing from requirements.txt**: `anthropic` (for LLM validator) and `flask` (for web dashboard) are used but not listed in `requirements.txt`. Install separately if needed.
 - **Trained models in `models/`**: `.pkl` (sklearn) and `.pt` (torch) files. Not checked into git — must be trained locally via `python main.py train`.
+- **Backtest duration**: Full 6-strategy comparison (2018–2024) takes ~3 hours. Single strategy via `--strategy factor_rl` takes ~40 min. `factor_only` runs in seconds.
