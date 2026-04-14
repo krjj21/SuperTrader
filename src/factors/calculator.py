@@ -19,6 +19,7 @@ def compute_cross_sectional_factors(
     codes: list[str],
     date: str,
     lookback_days: int = 300,
+    ohlcv_dict: dict[str, pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     """주어진 날짜의 크로스섹션 팩터 매트릭스를 계산합니다.
 
@@ -26,18 +27,33 @@ def compute_cross_sectional_factors(
         codes: 종목코드 리스트
         date: 기준일 (YYYYMMDD)
         lookback_days: OHLCV lookback 기간
+        ohlcv_dict: 사전 로드된 OHLCV 데이터 (None이면 자동 로드)
 
     Returns:
         DataFrame [code index, factor columns] - 각 종목의 최신 팩터 값
     """
-    # 시작일 계산
-    from datetime import datetime, timedelta
-    end_dt = datetime.strptime(date, "%Y%m%d")
-    start_dt = end_dt - timedelta(days=lookback_days)
-    start = start_dt.strftime("%Y%m%d")
+    if ohlcv_dict is None:
+        # 시작일 계산
+        from datetime import datetime, timedelta
+        end_dt = datetime.strptime(date, "%Y%m%d")
+        start_dt = end_dt - timedelta(days=lookback_days)
+        start = start_dt.strftime("%Y%m%d")
 
-    # OHLCV 배치 로드
-    ohlcv_dict = get_ohlcv_batch(codes, start, date)
+        # OHLCV 배치 로드
+        ohlcv_dict = get_ohlcv_batch(codes, start, date)
+    else:
+        # 사전 로드된 데이터를 기준일까지 필터링
+        dt = pd.Timestamp(date)
+        filtered = {}
+        for code in codes:
+            if code not in ohlcv_dict:
+                continue
+            df = ohlcv_dict[code]
+            mask = df["date"] <= dt
+            df_until = df[mask]
+            if len(df_until) >= 60:
+                filtered[code] = df_until
+        ohlcv_dict = filtered
 
     # 각 종목의 OHLCV 기반 팩터 계산
     factor_rows = {}

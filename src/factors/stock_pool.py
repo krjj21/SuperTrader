@@ -35,6 +35,7 @@ def build_stock_pool(
     return_history: dict[str, pd.Series] | None = None,
     factor_report: pd.DataFrame | None = None,
     previous_pool: StockPool | None = None,
+    ohlcv_dict: dict[str, pd.DataFrame] | None = None,
 ) -> StockPool:
     """주어진 날짜의 종목풀을 구성합니다.
 
@@ -44,6 +45,7 @@ def build_stock_pool(
         return_history: 수익률 히스토리 (유효성 검증용)
         factor_report: 사전 계산된 팩터 리포트
         previous_pool: 이전 종목풀 (진입/퇴출 추적용)
+        ohlcv_dict: 사전 로드된 OHLCV 데이터 (백테스트용, None이면 자동 로드)
     """
     config = get_config()
 
@@ -56,7 +58,7 @@ def build_stock_pool(
     codes = universe["code"].tolist()
 
     # 2. 크로스섹션 팩터 계산
-    factor_df = compute_cross_sectional_factors(codes, date)
+    factor_df = compute_cross_sectional_factors(codes, date, ohlcv_dict=ohlcv_dict)
     if factor_df.empty:
         return StockPool(date=date, codes=[])
 

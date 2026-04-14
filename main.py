@@ -33,7 +33,7 @@ def setup_logging():
 # ═══════════════════════════════════════════════
 # 백테스트 모드
 # ═══════════════════════════════════════════════
-def run_backtest():
+def run_backtest(only_strategies: list[str] | None = None):
     """팩터 + 타이밍 전략 비교 백테스트를 실행합니다."""
     config = get_config()
     logger.info("=" * 60)
@@ -42,6 +42,7 @@ def run_backtest():
 
     from src.data.market_data import get_universe, get_ohlcv_batch
     from src.factors.alpha101 import compute_all_factors
+    from src.factors.stock_pool import build_stock_pool
     from backtest.comparison import run_strategy_comparison
     from backtest.report import plot_equity_comparison, print_comparison_table
 
@@ -57,10 +58,9 @@ def run_backtest():
     codes = universe["code"].tolist()
     logger.info(f"유니버스: {len(codes)}종목")
 
-    # 2. OHLCV 데이터 로드 (상위 50종목으로 빠른 테스트)
+    # 2. OHLCV 데이터 로드
     logger.info("Step 2: OHLCV 데이터 로드")
-    n_stocks = min(50, len(codes))
-    ohlcv_dict = get_ohlcv_batch(codes[:n_stocks], start, end)
+    ohlcv_dict = get_ohlcv_batch(codes, start, end)
     logger.info(f"OHLCV 로드: {len(ohlcv_dict)}종목")
 
     # 3. 리밸런싱 날짜 생성 (월초)
@@ -68,10 +68,10 @@ def run_backtest():
     rebalance_dates = _generate_rebalance_dates(start, end, config.factors.rebalance_freq)
     logger.info(f"리밸런싱 날짜: {len(rebalance_dates)}회")
 
-    # 4. 종목풀 히스토리 구축 (OHLCV 기반 모멘텀 팩터)
-    logger.info("Step 4: 종목풀 히스토리 구축")
-    pool_history = _build_pool_history_from_ohlcv(
-        ohlcv_dict, rebalance_dates, config.factors.top_n,
+    # 4. 종목풀 히스토리 구축 (팩터 파이프라인 — 라이브 매매와 동일)
+    logger.info("Step 4: 종목풀 히스토리 구축 (팩터 기반)")
+    pool_history = _build_pool_history_factor_based(
+        ohlcv_dict, rebalance_dates, build_stock_pool,
     )
 
     # 5. ML 모델 학습 (있으면)
@@ -82,6 +82,7 @@ def run_backtest():
     logger.info("Step 6: 전략 비교 백테스트 실행")
     comparison = run_strategy_comparison(
         ohlcv_dict, pool_history, rebalance_dates, model_paths,
+        only_strategies=only_strategies,
     )
 
     if not comparison.empty:
@@ -91,44 +92,37 @@ def run_backtest():
         logger.warning("백테스트 결과 없음")
 
 
-def _build_pool_history_from_ohlcv(
+def _build_pool_history_factor_based(
     ohlcv_dict: dict[str, pd.DataFrame],
     rebalance_dates: list[str],
-    top_n: int = 30,
+    build_stock_pool_fn,
 ) -> dict[str, list[str]]:
-    """OHLCV 데이터에서 모멘텀 기반으로 종목풀을 구성합니다."""
+    """팩터 파이프라인 기반으로 종목풀을 구성합니다 (라이브 매매와 동일)."""
     pool_history = {}
-    available_codes = list(ohlcv_dict.keys())
+    previous_pool = None
 
-    for date in rebalance_dates:
-        dt = pd.Timestamp(date)
-        scores = {}
+    for i, date in enumerate(rebalance_dates):
+        # YYYYMMDD 형식으로 변환
+        date_fmt = date.replace("-", "")
+        logger.info(f"  종목풀 구성 {i+1}/{len(rebalance_dates)}: {date}")
 
-        for code, df in ohlcv_dict.items():
-            # 기준일까지의 데이터
-            mask = df["date"] <= dt
-            df_until = df[mask]
-            if len(df_until) < 60:
-                continue
+        pool = build_stock_pool_fn(
+            date=date_fmt,
+            previous_pool=previous_pool,
+            ohlcv_dict=ohlcv_dict,
+        )
 
-            close = df_until["close"]
-            # 모멘텀 점수: 6개월 수익률 - 1개월 수익률
-            if len(close) >= 120:
-                ret_6m = close.iloc[-1] / close.iloc[-120] - 1
-                ret_1m = close.iloc[-1] / close.iloc[-20] - 1
-                scores[code] = ret_6m - ret_1m
-            elif len(close) >= 60:
-                ret_3m = close.iloc[-1] / close.iloc[-60] - 1
-                scores[code] = ret_3m
-
-        if scores:
-            sorted_codes = sorted(scores, key=lambda x: scores[x], reverse=True)
-            pool_codes = sorted_codes[:min(top_n, len(sorted_codes))]
+        if pool.codes:
+            pool_history[date] = pool.codes
+            previous_pool = pool
         else:
-            pool_codes = available_codes[:top_n]
-
-        pool_history[date] = pool_codes
-        logger.info(f"  {date}: {len(pool_codes)}종목 선정")
+            # 팩터 계산 실패 시 이전 종목풀 유지
+            if previous_pool and previous_pool.codes:
+                pool_history[date] = previous_pool.codes
+                logger.warning(f"  {date}: 팩터 계산 실패, 이전 종목풀 유지 ({len(previous_pool.codes)}종목)")
+            else:
+                pool_history[date] = list(ohlcv_dict.keys())[:30]
+                logger.warning(f"  {date}: 팩터 계산 실패, 가용 종목으로 대체")
 
     return pool_history
 
@@ -199,7 +193,7 @@ def run_live():
     from src.broker.account import AccountManager
     from src.risk.manager import RiskManager
     from src.notification.slack_bot import SlackNotifier
-    from src.db.models import init_db
+    from src.db.models import init_db, save_runtime_status, save_signal_log, save_daily_pnl
 
     # 초기화
     init_db(config.database.path)
@@ -216,6 +210,19 @@ def run_live():
     from src.factors.stock_pool import build_stock_pool
     _current_pool = [None]  # mutable container for closure
     _stock_names: dict[str, str] = {}  # 종목코드 → 종목명 캐시
+    validator = None
+
+    def sync_runtime_status() -> None:
+        pool = _current_pool[0]
+        save_runtime_status(
+            strategy=config.strategy.name,
+            pool_size=len(pool.codes) if pool else 0,
+            llm_enabled=bool(validator and validator.is_enabled),
+            kill_switch=risk_mgr.kill_switch_active,
+            check_interval=config.schedule.check_interval_sec,
+            daily_loss_limit=config.risk.daily_loss_limit_pct * 100,
+            max_positions=config.risk.max_total_positions,
+        )
 
     def rebalance_pool():
         """팩터 기반 종목풀을 리밸런싱합니다."""
@@ -237,10 +244,14 @@ def run_live():
 
                 logger.info(f"종목풀 업데이트: {len(pool.codes)}종목 (신규 {len(pool.entered)}, 퇴출 {len(pool.exited)})")
                 notifier.notify_start()  # 종목풀 갱신 알림
+                sync_runtime_status()
             else:
                 logger.warning("종목풀이 비어 있습니다 — 기존 풀 유지")
+                sync_runtime_status()
         except Exception as e:
             logger.error(f"종목풀 구성 실패: {e}")
+            risk_mgr.record_error()
+            sync_runtime_status()
             notifier.notify_error(str(e), "종목풀 리밸런싱")
 
     # 시작 시 즉시 종목풀 구성
@@ -264,6 +275,7 @@ def run_live():
         logger.info("Notion 일일 리포트 비활성화 — NOTION_TOKEN/NOTION_DATABASE_ID 미설정")
 
     notifier.notify_start()
+    sync_runtime_status()
 
     # 스케줄러
     scheduler = BlockingScheduler()
@@ -276,6 +288,7 @@ def run_live():
         try:
             balance = account_mgr.get_balance()
             risk_mgr.check_daily_loss_limit(balance.total_pnl, balance.total_eval)
+            sync_runtime_status()
 
             # 종목명 캐시 업데이트
             for pos in balance.positions:
@@ -304,6 +317,11 @@ def run_live():
                 if pos.stock_code not in stop_codes
             }
 
+            # RL 전략 포지션 동기화 (보유 종목 정보 전달)
+            if hasattr(strategy, 'sync_positions'):
+                prices = {p.stock_code: float(p.current_price) for p in balance.positions}
+                strategy.sync_positions(held_codes, prices)
+
             # 종목풀 내 종목에 대해 시그널 체크
             pool_codes = list(strategy._pool) if hasattr(strategy, '_pool') else []
             signal_summary = {"BUY": 0, "SELL": 0, "HOLD": 0, "error": 0}
@@ -328,6 +346,13 @@ def run_live():
                     confirmed, llm_reason = validator.validate_signal(
                         code, signal.stock_name, signal.signal.value,
                         signal.reason, df,
+                    )
+                    save_signal_log(
+                        stock_code=code,
+                        stock_name=signal.stock_name,
+                        signal=signal.signal.value,
+                        decision="확정" if confirmed else "보류",
+                        reason=llm_reason,
                     )
                     if not confirmed:
                         logger.info(f"LLM 보류: {signal.stock_name} {signal.signal.value} — {llm_reason}")
@@ -357,12 +382,32 @@ def run_live():
                                 if order.order_no:
                                     notifier.notify_order_filled(order)
 
-            logger.info(f"시그널 체크 완료: {len(pool_codes)}종목 — BUY:{signal_summary['BUY']} SELL:{signal_summary['SELL']} HOLD:{signal_summary['HOLD']} 오류:{signal_summary['error']}")
+            summary_msg = f"BUY:{signal_summary['BUY']} SELL:{signal_summary['SELL']} HOLD:{signal_summary['HOLD']} 오류:{signal_summary['error']}"
+            logger.info(f"시그널 체크 완료: {len(pool_codes)}종목 — {summary_msg}")
+            save_signal_log(
+                stock_code="",
+                stock_name=f"{len(pool_codes)}종목 스캔",
+                signal="SCAN",
+                decision=f"B:{signal_summary['BUY']} S:{signal_summary['SELL']} H:{signal_summary['HOLD']}",
+                reason=f"오류: {signal_summary['error']}" if signal_summary['error'] > 0 else "정상",
+                signal_type="summary",
+            )
             risk_mgr.reset_error_count()
+            sync_runtime_status()
+
+            # 일일 수익 스냅샷 (대시보드 Cumulative Return 차트용)
+            save_daily_pnl(
+                total_eval=balance.total_eval,
+                total_deposit=balance.total_deposit,
+                total_pnl=balance.total_pnl,
+                total_pnl_pct=balance.total_pnl_pct,
+                num_positions=len(balance.positions),
+            )
 
         except Exception as e:
             logger.error(f"시그널 체크 오류: {e}")
             risk_mgr.record_error()
+            sync_runtime_status()
             notifier.notify_error(str(e))
 
     def daily_report():
@@ -443,6 +488,8 @@ def run_live():
 
         except Exception as e:
             logger.error(f"모델 재학습 실패: {e}")
+            risk_mgr.record_error()
+            sync_runtime_status()
             notifier.notify_error(str(e), "주간 모델 재학습")
 
     # 스케줄 등록
@@ -471,7 +518,17 @@ def run_live():
     )
 
     logger.info(f"스케줄 시작: {config.schedule.check_interval_sec}초 간격, 리밸런싱 매월 {config.schedule.rebalance_day}일, 재학습 매주 토요일")
-    scheduler.start()
+    try:
+        scheduler.start()
+    except (KeyboardInterrupt, SystemExit):
+        logger.info("스케줄러 정상 종료")
+    except Exception as e:
+        logger.critical(f"스케줄러 비정상 종료: {e}")
+        sync_runtime_status()
+        notifier.notify_error(str(e), "스케줄러 크래시")
+    finally:
+        sync_runtime_status()
+        scheduler.shutdown(wait=False)
 
 
 def _create_live_strategy(config):
@@ -636,6 +693,10 @@ def main():
         "--config", type=str, default="config/settings.yaml",
         help="설정 파일 경로",
     )
+    parser.add_argument(
+        "--strategy", type=str, nargs="+", default=None,
+        help="백테스트할 전략 (예: --strategy factor_rl)",
+    )
 
     args = parser.parse_args()
 
@@ -644,7 +705,7 @@ def main():
     setup_logging()
 
     if args.mode == "backtest":
-        run_backtest()
+        run_backtest(only_strategies=args.strategy)
     elif args.mode == "live":
         run_live()
     elif args.mode == "train":
