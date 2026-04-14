@@ -28,7 +28,9 @@ class TradingEnv:
         dsr_eta: float = 0.01,
         drawdown_lambda: float = 1.0,
         drawdown_threshold: float = 0.05,
-        holding_cost: float = 0.0,
+        holding_cost: float = 0.0005,       # 일별 보유 비용 (장기 보유 억제)
+        holding_cost_ramp: float = 0.0001,   # 보유일 증가에 따른 추가 비용
+        opportunity_weight: float = 0.5,     # 미보유 시 기회비용 가중치
         invalid_penalty: float = 0.002,
     ):
         self.commission_rate = commission_rate
@@ -41,6 +43,8 @@ class TradingEnv:
         self.drawdown_lambda = drawdown_lambda
         self.drawdown_threshold = drawdown_threshold
         self.holding_cost = holding_cost
+        self.holding_cost_ramp = holding_cost_ramp
+        self.opportunity_weight = opportunity_weight
         self.invalid_penalty = invalid_penalty
 
         # 에피소드 상태
@@ -140,13 +144,17 @@ class TradingEnv:
             cost = self.commission_rate + self.tax_rate
             realized_pnl = (current_price - self._entry_price) / self._entry_price
 
-            # SELL 학습 신호 강화:
-            # - 손실 종목 SELL → 양의 보너스 (손절 학습)
-            # - 수익 종목 SELL → 약한 페널티 (조기 익절 방지)
+            # SELL 보너스/페널티:
+            # - 손절(-3% 이하): 보너스 (손실 확대 방지 학습)
+            # - 적정 익절(+3~10%): 보너스 (수익 실현 학습)
+            # - 조기 익절(+10% 이상): 페널티 (추세 추종 학습)
+            # - 소폭 구간(-3~+3%): 중립
             if realized_pnl < -0.03:
-                sell_bonus = 0.5 * abs(realized_pnl)  # -3% 이하 손절 보너스
-            elif realized_pnl > 0.05:
-                sell_bonus = -0.2 * realized_pnl  # +5% 이상 조기 익절 페널티
+                sell_bonus = 0.5 * abs(realized_pnl)
+            elif 0.03 <= realized_pnl <= 0.10:
+                sell_bonus = 0.3 * realized_pnl      # 적정 구간 익절 보상
+            elif realized_pnl > 0.10:
+                sell_bonus = -0.2 * realized_pnl      # 대폭 수익 조기 청산 페널티
             else:
                 sell_bonus = 0.0
 
@@ -167,13 +175,20 @@ class TradingEnv:
             base_return = -self.invalid_penalty
 
         elif action == ACTION_HOLD and self._holding:
-            # 보유 유지 → log return 그대로
-            base_return = log_return - self.holding_cost
+            # 보유 유지 → log return - 체증하는 holding cost
+            # 단기(~5일): 낮은 비용 → 장기(20일+): 높은 비용
+            ramp_cost = self.holding_cost + self.holding_cost_ramp * min(self._holding_days, 20)
+            base_return = log_return - ramp_cost
             self._holding_days += 1
 
         else:
             # 미보유 HOLD → 기회비용: 상승장에서 안 사면 벌점
-            base_return = -log_return * 0.3
+            # 상승(log_return > 0): 놓친 수익의 opportunity_weight만큼 페널티
+            # 하락(log_return < 0): 약한 보상 (올바른 관망)
+            if log_return > 0:
+                base_return = -log_return * self.opportunity_weight
+            else:
+                base_return = -log_return * 0.1  # 하락장 관망 보상
 
         self._total_cost += cost
 

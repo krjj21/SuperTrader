@@ -402,5 +402,110 @@ def api_indicators(code: str):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/training")
+def training_page():
+    return render_template("training.html")
+
+
+@app.route("/api/training")
+def api_training():
+    """학습 로그 파싱 API"""
+    try:
+        import re
+        logs = {}
+        for name, path in [("sac", "/tmp/sac_train.log"), ("ppo", "/tmp/rl_train.log")]:
+            entries = []
+            status = "idle"
+            try:
+                raw = Path(path).read_bytes()
+                for enc in ("utf-8", "cp949", "euc-kr"):
+                    try:
+                        text = raw.decode(enc)
+                        break
+                    except (UnicodeDecodeError, LookupError):
+                        continue
+                else:
+                    text = raw.decode("utf-8", errors="ignore")
+
+                # Episode 로그 파싱
+                ep_pattern = re.compile(
+                    r"Episode (\d+)/(\d+):.*?"
+                    r"reward=([-\d.]+).*?"
+                    r"val_sharpe=([-\d.]+).*?"
+                    r"val_return=([-\d.]+)%.*?"
+                    r"trades=([\d.]+)"
+                )
+                for m in ep_pattern.finditer(text):
+                    entries.append({
+                        "episode": int(m.group(1)),
+                        "total": int(m.group(2)),
+                        "reward": float(m.group(3)),
+                        "val_sharpe": float(m.group(4)),
+                        "val_return": float(m.group(5)),
+                        "trades": float(m.group(6)),
+                    })
+
+                # Best Sharpe
+                best_pattern = re.compile(r"Best Sharpe: ([-\d.]+)")
+                best_matches = best_pattern.findall(text)
+                best_sharpe = float(best_matches[-1]) if best_matches else None
+
+                # 학습 완료 확인
+                if "Early stopping" in text or "학습 완료" in text or "�н� �Ϸ�" in text:
+                    status = "completed"
+                elif entries:
+                    status = "training"
+
+                # 최종 결과
+                final_pattern = re.compile(
+                    r"(?:학습 완료|�н� �Ϸ�).*?sharpe=([-\d.]+).*?"
+                    r"return=([-\d.]+)%.*?"
+                    r"win_rate=([\d.]+)%.*?"
+                    r"avg_trades=([\d.]+)"
+                )
+                final = final_pattern.search(text)
+                final_result = None
+                if final:
+                    final_result = {
+                        "sharpe": float(final.group(1)),
+                        "return": float(final.group(2)),
+                        "win_rate": float(final.group(3)),
+                        "avg_trades": float(final.group(4)),
+                    }
+
+                # alpha/entropy 파싱 (SAC)
+                alpha_pattern = re.compile(r"alpha=([\d.]+)")
+                alphas = alpha_pattern.findall(text)
+
+                # c_loss/a_loss 파싱 (SAC)
+                closs_pattern = re.compile(r"c_loss=([\d.]+)")
+                closses = closs_pattern.findall(text)
+
+                # p_loss/v_loss 파싱 (PPO)
+                ploss_pattern = re.compile(r"p_loss=([-\d.]+)")
+                plosses = ploss_pattern.findall(text)
+
+                for i, e in enumerate(entries):
+                    if name == "sac" and i < len(closses):
+                        e["c_loss"] = float(closses[i])
+                    if name == "ppo" and i < len(plosses):
+                        e["p_loss"] = float(plosses[i])
+                    if i < len(alphas):
+                        e["alpha"] = float(alphas[i])
+
+                logs[name] = {
+                    "status": status,
+                    "entries": entries,
+                    "best_sharpe": best_sharpe,
+                    "final": final_result,
+                }
+            except FileNotFoundError:
+                logs[name] = {"status": "no_log", "entries": [], "best_sharpe": None, "final": None}
+
+        return jsonify({"ok": True, **logs})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=False)

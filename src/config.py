@@ -112,8 +112,8 @@ class RLParams(BaseModel):
     epochs_per_update: int = 4
     episodes: int = 200
     hidden_dim: int = 256
-    buy_action_threshold: float = 0.08
-    sell_action_threshold: float = 0.05
+    buy_action_threshold: float = 0.13
+    sell_action_threshold: float = 0.06
 
 
 class TimingConfig(BaseModel):

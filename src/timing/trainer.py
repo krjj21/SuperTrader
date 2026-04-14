@@ -62,7 +62,7 @@ def create_model(model_type: str, config=None):
     elif model_type == "rl":
         from src.timing.rl_agent import RLTimingModel
         return RLTimingModel(
-            state_dim=43,  # 환경 reset 시 실제 dim으로 재설정됨
+            state_dim=43,
             hidden_dim=config.rl.hidden_dim,
             learning_rate=config.rl.learning_rate,
             gamma=config.rl.gamma,
