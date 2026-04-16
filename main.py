@@ -335,6 +335,8 @@ def run_live():
                             f"손절 매도: {pos.stock_name}({pos.stock_code}) "
                             f"{pos.pnl_pct:.2f}% / {pos.pnl:,}원"
                         )
+                        from src.db.models import remove_holding
+                        remove_holding(pos.stock_code)
                 except Exception as e:
                     logger.error(f"손절 매도 실패: {pos.stock_code} - {e}")
 
@@ -344,10 +346,11 @@ def run_live():
                 if pos.stock_code not in stop_codes
             }
 
-            # RL 전략 포지션 동기화 (보유 종목 정보 전달)
+            # RL 전략 포지션 동기화 (보유 종목 정보 + 매수평균가 전달)
             if hasattr(strategy, 'sync_positions'):
                 prices = {p.stock_code: float(p.current_price) for p in balance.positions}
-                strategy.sync_positions(held_codes, prices)
+                avg_prices = {p.stock_code: float(p.avg_price) for p in balance.positions}
+                strategy.sync_positions(held_codes, prices, avg_prices=avg_prices)
 
             # 종목풀 내 종목에 대해 시그널 체크
             pool_codes = list(strategy._pool) if hasattr(strategy, '_pool') else []
@@ -401,6 +404,15 @@ def run_live():
                                 order = order_mgr.buy(code, qty)
                                 if order.order_no:
                                     notifier.notify_order_filled(order)
+                                    # DB에 매수일 기록
+                                    from src.db.models import save_holding
+                                    save_holding(
+                                        stock_code=code,
+                                        stock_name=stock_name,
+                                        avg_price=signal.price,
+                                        quantity=qty,
+                                        buy_date=datetime.now().strftime("%Y%m%d"),
+                                    )
                     else:
                         # 보유 중이면 전량 매도
                         for pos in balance.positions:
@@ -408,6 +420,9 @@ def run_live():
                                 order = order_mgr.sell(code, pos.quantity)
                                 if order.order_no:
                                     notifier.notify_order_filled(order)
+                                    # DB에서 매도 종목 제거
+                                    from src.db.models import remove_holding
+                                    remove_holding(code)
 
             summary_msg = f"BUY:{signal_summary['BUY']} SELL:{signal_summary['SELL']} HOLD:{signal_summary['HOLD']} 오류:{signal_summary['error']}"
             logger.info(f"시그널 체크 완료: {len(pool_codes)}종목 — {summary_msg}")

@@ -100,8 +100,8 @@ All strategies inherit `BaseStrategy` (in `base.py`) and implement `generate_sig
 - **llm_validator.py**: LLM signal validation — sends ML signal + technical context to Claude Haiku (configurable model), confirms or rejects based on RSI/MA/volume analysis
 - Model implementations: `decision_tree.py`, `gradient_boost.py` (XGBoost/LightGBM), `lstm_model.py`, `transformer_model.py`
 - **rl_env.py**: Trading Gym environment — State(30 features + 3 position) / Action(BUY/HOLD/SELL) / Reward: Differential Sharpe Ratio + drawdown penalty + transaction cost. Log-return based risk-adjusted reward
-- **rl_agent.py**: PPO Actor-Critic (shared backbone + LayerNorm) + GAE (λ=0.95) + mini-batch update. Legacy GRPO model auto-conversion supported
-- **rl_trainer.py**: Multi-stock batch rollout → PPO update, walk-forward validation, Sharpe-based model selection, early stopping
+- **rl_agent.py**: PPO Actor-Critic (shared backbone + LayerNorm) + GAE (λ=0.95) + mini-batch update. Legacy GRPO model auto-conversion supported. Enables `cudnn.benchmark` when CUDA available.
+- **rl_trainer.py**: Multi-stock batch rollout → PPO update, walk-forward validation, Sharpe-based model selection, early stopping. Rollout collection uses **ThreadPoolExecutor** (8 workers, CPU inference) for ~2x speedup. GPU used only for PPO batch update. Mini-batch size auto-scales by VRAM (6GB → 384).
 
 sklearn models save as `.pkl`, torch models as `.pt`.
 
@@ -109,7 +109,7 @@ sklearn models save as `.pkl`, torch models as `.pt`.
 
 The RL model trains on **daily bars** (1 step = 1 trading day). In live mode, signals are checked every 5 minutes, but `holding_days` is computed as **actual business days** since entry (via `_business_days_held()`), not cycle count. This ensures the model's learned holding behavior matches real-world time.
 
-**Known issue**: With `holding_cost=0.0` in rl_env.py, the model tends to converge to a buy-and-hold strategy (avg_trades ~0.5/episode). Reward structure adjustment (holding cost, opportunity cost) is needed to encourage active trading.
+**Reward v3 (current)**: `holding_cost=0.0002` + ramp `0.00005/day`, `opportunity_weight=0.35`. Produces ~5-17 trades/episode with Sharpe ~0.34, win rate ~78%. Higher holding cost or additional anti-churn penalties cause trades to collapse to near zero — v4 experiment (short_hold_penalty, roundtrip_penalty, churn_penalty) was reverted back to v3.
 
 ### RL Action Thresholds
 
@@ -117,7 +117,7 @@ The RL model outputs action probabilities P(HOLD), P(BUY), P(SELL). Configurable
 - `buy_action_threshold: 0.13` — P(BUY) > 13% triggers BUY (model average level)
 - `sell_action_threshold: 0.06` — P(SELL) > 6% triggers SELL (model average level)
 
-These flow through `factor_rl.py` → `predictor.py` → `rl_agent.py`. Live trading calls `sync_positions()` each cycle to pass actual holdings to the RL strategy so it can generate SELL signals for held stocks.
+These flow through `factor_rl.py` → `predictor.py` → `rl_agent.py`. Live trading calls `sync_positions(held_codes, prices, avg_prices)` each cycle to pass actual holdings to the RL strategy. Buy date resolution order: **DB (`holding_positions`) → daily chart estimation (closest close to avg_price) → today (fallback)**. Estimated dates are auto-saved to DB for future lookups.
 
 ### Backtest Engine (`backtest/`)
 
@@ -151,7 +151,9 @@ Rebalancing frequency: **biweekly** (14-day intervals). Both backtest and live u
 
 ### Database (`src/db/`)
 
-SQLAlchemy ORM with SQLite. `init_db(path)` creates tables (guarded against duplicate calls). Models: `TradeLog`, `DailyPnL`, `PositionLog`, `SignalLog`, `RuntimeStatus`. `save_signal_log()` records LLM validation results; `get_recent_signals(limit, days)` queries them for the web dashboard. `save_runtime_status()` writes a singleton row for live pipeline state.
+SQLAlchemy ORM with SQLite. `init_db(path)` creates tables (guarded against duplicate calls). Models: `TradeLog`, `DailyPnL`, `PositionLog`, `SignalLog`, `RuntimeStatus`, `HoldingPosition`. `save_signal_log()` records LLM validation results; `get_recent_signals(limit, days)` queries them for the web dashboard. `save_runtime_status()` writes a singleton row for live pipeline state.
+
+**HoldingPosition** (`holding_positions` table): Tracks current positions with `buy_date` (YYYYMMDD). Written on BUY fill (`save_holding()`), deleted on SELL/stop-loss fill (`remove_holding()`). `get_holding_buy_date(code)` returns the stored buy date. This solves the holding_days=0 bug where system restarts would lose the actual entry date.
 
 ### Web Dashboard (`web/`)
 
@@ -194,6 +196,7 @@ Flask app (`web/app.py`) for real-time account monitoring. Run separately from m
 ### Environment Gotchas
 
 - **WSL + Windows venv**: The project uses a Windows Python venv from WSL. Always use `/mnt/e/SuperTrader/venv/Scripts/python.exe`, not a Linux python.
-- **Trained models in `models/`**: `.pkl` (sklearn) and `.pt` (torch) files. Not checked into git — must be trained locally via `python main.py train`.
+- **Trained models in `models/`**: `.pkl` (sklearn) and `.pt` (torch) files. Not checked into git — must be trained locally via `python main.py train`. RL model backups: `rl_timing.backup_grpo.pt` (legacy), `backup_ppo_v1.pt`, `backup_ppo_v2.pt` (v3 reward).
+- **PyTorch CUDA**: `torch 2.11.0+cu126` installed for GTX 1660 SUPER 6GB. Rollout is CPU-bound (env simulation); GPU only helps PPO batch updates.
 - **Backtest duration**: Full 6-strategy comparison (2018–2024) takes ~3 hours. Single strategy via `--strategy factor_rl` takes ~40 min. `factor_only` runs in seconds.
 - **File encoding**: Windows Python outputs EUC-KR/CP949 for Korean text. JSON files (e.g. `data/current_pool.json`) and logs need multi-encoding fallback when reading from WSL/Flask.

@@ -88,6 +88,20 @@ class SignalLog(Base):
     created_at = Column(DateTime, default=datetime.now, index=True)
 
 
+class HoldingPosition(Base):
+    """현재 보유 포지션 (매수일 추적용)"""
+    __tablename__ = "holding_positions"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    stock_code = Column(String(10), nullable=False, unique=True, index=True)
+    stock_name = Column(String(50), default="")
+    avg_price = Column(Integer, nullable=False)
+    quantity = Column(Integer, nullable=False)
+    buy_date = Column(String(8), nullable=False)  # YYYYMMDD
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
 class RuntimeStatus(Base):
     """대시보드용 런타임 상태 스냅샷"""
     __tablename__ = "runtime_status"
@@ -302,6 +316,79 @@ def save_signal_log(
         session.commit()
         session.refresh(log)
         return log
+    finally:
+        session.close()
+
+
+def save_holding(
+    stock_code: str,
+    stock_name: str,
+    avg_price: int,
+    quantity: int,
+    buy_date: str,
+) -> HoldingPosition:
+    """보유 포지션을 기록합니다 (매수 시 호출)."""
+    session = get_session()
+    try:
+        existing = session.query(HoldingPosition).filter_by(stock_code=stock_code).first()
+        if existing:
+            existing.stock_name = stock_name
+            existing.avg_price = avg_price
+            existing.quantity = quantity
+            existing.buy_date = buy_date
+            existing.updated_at = datetime.now()
+            session.commit()
+            return existing
+
+        pos = HoldingPosition(
+            stock_code=stock_code,
+            stock_name=stock_name,
+            avg_price=avg_price,
+            quantity=quantity,
+            buy_date=buy_date,
+        )
+        session.add(pos)
+        session.commit()
+        session.refresh(pos)
+        return pos
+    finally:
+        session.close()
+
+
+def remove_holding(stock_code: str) -> None:
+    """보유 포지션을 제거합니다 (매도 시 호출)."""
+    session = get_session()
+    try:
+        session.query(HoldingPosition).filter_by(stock_code=stock_code).delete()
+        session.commit()
+    finally:
+        session.close()
+
+
+def get_holding_buy_date(stock_code: str) -> str | None:
+    """보유 포지션의 매수일을 조회합니다.
+
+    Returns:
+        매수일 (YYYYMMDD) 또는 None
+    """
+    session = get_session()
+    try:
+        pos = session.query(HoldingPosition).filter_by(stock_code=stock_code).first()
+        return pos.buy_date if pos else None
+    finally:
+        session.close()
+
+
+def get_all_holdings() -> dict[str, str]:
+    """모든 보유 포지션의 매수일을 조회합니다.
+
+    Returns:
+        {종목코드: 매수일(YYYYMMDD)}
+    """
+    session = get_session()
+    try:
+        positions = session.query(HoldingPosition).all()
+        return {p.stock_code: p.buy_date for p in positions}
     finally:
         session.close()
 

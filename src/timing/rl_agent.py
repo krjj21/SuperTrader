@@ -109,6 +109,10 @@ class RLTimingModel:
         self.actor = ActorCriticNetwork(state_dim, hidden_dim).to(self.device)
         self.optimizer = torch.optim.Adam(self.actor.parameters(), lr=learning_rate)
 
+        # GPU 성능 최적화
+        if self.device.type == "cuda":
+            torch.backends.cudnn.benchmark = True
+
         self.feature_names: list[str] = []
 
     def compute_gae(
