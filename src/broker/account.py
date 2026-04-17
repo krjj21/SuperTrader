@@ -121,7 +121,11 @@ class AccountManager:
 
     def get_realized_pnl(self) -> dict:
         """당일 실현손익을 조회합니다."""
-        tr_id = "VTTC8715R" if self.config.kis.is_virtual else "TTTC8715R"
+        # 모의투자는 실현손익 API 미지원 → DB fallback 직행
+        if self.config.kis.is_virtual:
+            return self._get_realized_pnl_from_db()
+
+        tr_id = "TTTC8715R"
 
         today = datetime.now().strftime("%Y%m%d")
         params = {
@@ -166,4 +170,35 @@ class AccountManager:
             }
         except Exception as e:
             logger.warning(f"실현손익 조회 실패: {e}")
+            # DB fallback: trade_logs에서 당일 매매 집계
+            return self._get_realized_pnl_from_db()
+
+    @staticmethod
+    def _get_realized_pnl_from_db() -> dict:
+        """DB trade_logs에서 당일 매매 금액을 집계합니다 (KIS API fallback)."""
+        try:
+            from src.db.models import init_db, get_session, TradeLog
+            init_db()
+            session = get_session()
+            today = datetime.now().strftime("%Y%m%d")
+            cutoff = datetime.strptime(today, "%Y%m%d")
+            trades = (
+                session.query(TradeLog)
+                .filter(TradeLog.created_at >= cutoff, TradeLog.status == "filled")
+                .all()
+            )
+            session.close()
+
+            total_buy = sum(t.amount for t in trades if t.side == "buy")
+            total_sell = sum(t.amount for t in trades if t.side == "sell")
+            n_trades = len(trades)
+            realized_pnl = total_sell - total_buy
+
+            return {
+                "realized_pnl": realized_pnl,
+                "total_sell": total_sell,
+                "total_buy": total_buy,
+                "n_trades": n_trades,
+            }
+        except Exception:
             return {"realized_pnl": 0, "total_sell": 0, "total_buy": 0, "n_trades": 0}

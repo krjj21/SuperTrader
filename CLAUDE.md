@@ -147,7 +147,7 @@ Secrets (KIS API keys, Slack token, Anthropic API key) loaded from `config/.env`
 - `compute_cross_sectional_factors()` accepts optional `ohlcv_dict` for backtest (avoids re-fetching)
 - `build_stock_pool()` accepts optional `ohlcv_dict` for backtest data reuse
 
-Rebalancing frequency: **biweekly** (14-day intervals). Both backtest and live use the same pipeline.
+Rebalancing frequency: **monthly** (매월 첫 거래일). Both backtest and live use the same pipeline. Changed from biweekly based on academic research showing monthly rebalancing reduces turnover by ~50% with negligible impact on returns.
 
 ### Database (`src/db/`)
 

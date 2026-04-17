@@ -47,6 +47,7 @@ class UniverseConfig(BaseModel):
 
 
 class FactorConfig(BaseModel):
+    factor_module: str = "alpha101"   # alpha101, alpha158, both
     rebalance_freq: str = "biweekly"  # biweekly, monthly, quarterly
     top_n: int = 30
     composite_method: str = "ic_weighted"

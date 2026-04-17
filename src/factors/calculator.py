@@ -10,9 +10,42 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from src.factors.alpha101 import compute_all_factors, get_all_factor_names
 from src.data.market_data import get_ohlcv_batch, get_close_prices
 from src.data.factor_data import get_fundamentals, get_market_cap
+
+
+def _get_factor_functions() -> tuple:
+    """config에 따라 팩터 계산 함수를 반환합니다.
+
+    Returns:
+        (compute_all_factors, get_all_factor_names)
+    """
+    from src.config import get_config
+    module = getattr(get_config().factors, "factor_module", "alpha101")
+
+    if module == "alpha158":
+        from src.factors.alpha158 import compute_all_factors, get_all_factor_names
+        return compute_all_factors, get_all_factor_names
+    elif module == "both":
+        from src.factors.alpha101 import (
+            compute_all_factors as compute_101,
+            get_all_factor_names as names_101,
+        )
+        from src.factors.alpha158 import (
+            compute_all_factors as compute_158,
+            get_all_factor_names as names_158,
+        )
+
+        def compute_all_factors(df):
+            return pd.concat([compute_101(df), compute_158(df)], axis=1)
+
+        def get_all_factor_names():
+            return names_101() + names_158()
+
+        return compute_all_factors, get_all_factor_names
+    else:
+        from src.factors.alpha101 import compute_all_factors, get_all_factor_names
+        return compute_all_factors, get_all_factor_names
 
 
 def compute_cross_sectional_factors(
@@ -56,12 +89,13 @@ def compute_cross_sectional_factors(
         ohlcv_dict = filtered
 
     # 각 종목의 OHLCV 기반 팩터 계산
+    compute_fn, _ = _get_factor_functions()
     factor_rows = {}
     for code, df in ohlcv_dict.items():
         if len(df) < 60:  # 최소 60일 데이터 필요
             continue
         try:
-            factors = compute_all_factors(df)
+            factors = compute_fn(df)
             # 가장 최근 값 사용
             factor_rows[code] = factors.iloc[-1]
         except Exception as e:

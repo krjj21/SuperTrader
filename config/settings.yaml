@@ -17,7 +17,8 @@ universe:
 
 # ── 팩터 설정 ──
 factors:
-  rebalance_freq: "biweekly"      # biweekly, monthly, quarterly
+  factor_module: "alpha158"          # alpha101, alpha158, both
+  rebalance_freq: "monthly"        # biweekly, monthly, quarterly
   top_n: 30                       # 종목풀 크기
   composite_method: "ic_weighted" # equal, ic_weighted
   ic_lookback: 12                 # IC 계산 lookback (개월)

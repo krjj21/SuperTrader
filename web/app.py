@@ -32,6 +32,11 @@ _client = None
 _account_mgr = None
 _stock_name_cache: dict[str, str] = {}
 
+# ── 잔고 캐시 (KIS API 호출 최소화) ──
+_balance_cache: dict = {}
+_balance_cache_time: float = 0.0
+_BALANCE_CACHE_TTL: float = 15.0  # 15초 캐시
+
 
 def _lookup_stock_name(code: str) -> str:
     """종목코드 → 종목명 (pykrx 캐시)"""
@@ -62,59 +67,76 @@ def index():
     return render_template("dashboard.html")
 
 
+def _fetch_status_data() -> dict:
+    """KIS API에서 잔고 + 실현손익을 조회하고 캐시합니다."""
+    import time
+    global _balance_cache, _balance_cache_time
+
+    now = time.time()
+    if _balance_cache and (now - _balance_cache_time) < _BALANCE_CACHE_TTL:
+        return _balance_cache
+
+    acct = _get_account_mgr()
+    s = acct.get_balance()
+
+    positions = []
+    total_invested = 0
+    for p in s.positions:
+        invested = p.avg_price * p.quantity
+        total_invested += invested
+        positions.append({
+            "code": p.stock_code,
+            "name": p.stock_name,
+            "quantity": p.quantity,
+            "avg_price": p.avg_price,
+            "current_price": p.current_price,
+            "eval_amount": p.eval_amount,
+            "pnl": p.pnl,
+            "pnl_pct": round(p.pnl_pct, 2),
+        })
+
+    positions.sort(key=lambda x: x["pnl_pct"], reverse=True)
+    initial_capital = (s.total_eval - s.asset_change) if s.asset_change is not None else 10_000_000
+
+    # 실현손익은 에러 시 빈값 반환 (잔고와 분리)
+    try:
+        realized = acct.get_realized_pnl()
+    except Exception:
+        realized = {"realized_pnl": 0, "total_sell": 0, "total_buy": 0, "n_trades": 0}
+
+    result = {
+        "ok": True,
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "summary": {
+            "total_eval": s.total_eval,
+            "total_deposit": s.total_deposit,
+            "available_cash": s.available_cash,
+            "total_pnl": s.asset_change,
+            "total_pnl_pct": round(s.asset_change_pct, 2),
+            "total_invested": total_invested,
+            "num_positions": len(s.positions),
+            "initial_capital": initial_capital,
+            "total_return_pct": round(s.asset_change_pct, 2),
+            "asset_change": s.asset_change,
+            "asset_change_pct": round(s.asset_change_pct, 2),
+            "realized_pnl": realized["realized_pnl"],
+            "unrealized_pnl": s.total_pnl,
+            "total_sell": realized["total_sell"],
+            "total_buy": realized["total_buy"],
+            "n_trades": realized["n_trades"],
+        },
+        "positions": positions,
+    }
+
+    _balance_cache = result
+    _balance_cache_time = now
+    return result
+
+
 @app.route("/api/status")
 def api_status():
     try:
-        acct = _get_account_mgr()
-        s = acct.get_balance()
-
-        positions = []
-        total_invested = 0
-        for p in s.positions:
-            invested = p.avg_price * p.quantity
-            total_invested += invested
-            positions.append({
-                "code": p.stock_code,
-                "name": p.stock_name,
-                "quantity": p.quantity,
-                "avg_price": p.avg_price,
-                "current_price": p.current_price,
-                "eval_amount": p.eval_amount,
-                "pnl": p.pnl,
-                "pnl_pct": round(p.pnl_pct, 2),
-            })
-
-        # 수익률순 정렬
-        positions.sort(key=lambda x: x["pnl_pct"], reverse=True)
-
-        initial_capital = (s.total_eval - s.asset_change) if s.asset_change is not None else 10_000_000
-
-        # 실현손익 조회
-        realized = acct.get_realized_pnl()
-
-        return jsonify({
-            "ok": True,
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "summary": {
-                "total_eval": s.total_eval,
-                "total_deposit": s.total_deposit,
-                "available_cash": s.available_cash,
-                "total_pnl": s.asset_change,
-                "total_pnl_pct": round(s.asset_change_pct, 2),
-                "total_invested": total_invested,
-                "num_positions": len(s.positions),
-                "initial_capital": initial_capital,
-                "total_return_pct": round(s.asset_change_pct, 2),
-                "asset_change": s.asset_change,
-                "asset_change_pct": round(s.asset_change_pct, 2),
-                "realized_pnl": realized["realized_pnl"],
-                "unrealized_pnl": s.total_pnl,
-                "total_sell": realized["total_sell"],
-                "total_buy": realized["total_buy"],
-                "n_trades": realized["n_trades"],
-            },
-            "positions": positions,
-        })
+        return jsonify(_fetch_status_data())
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
@@ -413,7 +435,7 @@ def api_training():
     try:
         import re
         logs = {}
-        for name, path in [("sac", "/tmp/sac_train.log"), ("ppo", "/tmp/rl_train.log")]:
+        for name, path in [("sac", "logs/sac_train.log"), ("ppo", "logs/ppo_train.log")]:
             entries = []
             status = "idle"
             try:

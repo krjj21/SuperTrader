@@ -545,12 +545,12 @@ def run_live():
         hour=int(config.schedule.post_market.split(":")[0]),
         minute=int(config.schedule.post_market.split(":")[1]),
     )
-    # 2주 간격 리밸런싱 (장 시작 전)
+    # 월간 리밸런싱 (매월 첫 거래일, 장 시작 전)
     pre_h, pre_m = config.schedule.pre_market.split(":")
     scheduler.add_job(
-        rebalance_pool, "interval",
-        weeks=2,
-        start_date=datetime.now().replace(hour=int(pre_h), minute=int(pre_m), second=0),
+        rebalance_pool, "cron",
+        day=config.schedule.rebalance_day,
+        hour=int(pre_h), minute=int(pre_m),
     )
 
     # 매주 토요일 새벽 모델 재학습
@@ -739,11 +739,18 @@ def main():
         "--strategy", type=str, nargs="+", default=None,
         help="백테스트할 전략 (예: --strategy factor_rl)",
     )
+    parser.add_argument(
+        "--factor-module", type=str, default=None,
+        choices=["alpha101", "alpha158", "both"],
+        help="팩터 모듈 선택 (기본: config 설정 사용)",
+    )
 
     args = parser.parse_args()
 
     # 설정 로드
     load_config(args.config)
+    if args.factor_module:
+        get_config().factors.factor_module = args.factor_module
     setup_logging()
 
     if args.mode == "backtest":
