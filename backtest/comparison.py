@@ -58,6 +58,14 @@ def run_strategy_comparison(
             model_path=model_paths["rl"],
         )
 
+    # Hybrid(XGBoost + RL) 모델이 있으면 추가
+    if "xgboost" in model_paths and "rl" in model_paths:
+        from src.strategy.factor_hybrid import FactorHybridStrategy
+        strategies["factor_hybrid"] = FactorHybridStrategy(
+            ml_model_path=model_paths["xgboost"],
+            rl_model_path=model_paths["rl"],
+        )
+
     # 특정 전략만 실행
     if only_strategies:
         strategies = {k: v for k, v in strategies.items() if k in only_strategies}

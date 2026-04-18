@@ -590,6 +590,13 @@ def _create_live_strategy(config):
         model_path = "models/rl_timing.pt"
         from src.strategy.factor_rl import FactorRLStrategy
         return FactorRLStrategy(model_path, config.strategy.params.model_dump())
+    elif strategy_name == "factor_hybrid":
+        from src.strategy.factor_hybrid import FactorHybridStrategy
+        return FactorHybridStrategy(
+            ml_model_path="models/xgboost_timing.pkl",
+            rl_model_path="models/rl_timing.pt",
+            params=config.strategy.params.model_dump(),
+        )
     elif strategy_name.startswith("factor_"):
         model_type = strategy_name.replace("factor_", "")
         ext = ".pkl" if model_type in ("decision_tree", "xgboost", "lightgbm") else ".pt"
