@@ -22,7 +22,7 @@ logger.add("logs/threshold_sweep.log", rotation="10 MB")
 
 def main():
     from src.config import load_config, get_config
-    from src.data.market_data import get_universe, get_ohlcv_batch
+    from src.data.market_data import get_universe, get_ohlcv_batch, filter_by_listing_date
     from src.factors.stock_pool import build_stock_pool
     from backtest.portfolio_engine import PortfolioBacktestEngine
     from src.strategy.factor_hybrid import FactorHybridStrategy
@@ -38,6 +38,7 @@ def main():
     universe = get_universe(end)
     codes = universe["code"].tolist()[:100]
     ohlcv_dict = get_ohlcv_batch(codes, start, end)
+    ohlcv_dict = filter_by_listing_date(ohlcv_dict, start)
     logger.info(f"데이터 로드 완료: {len(ohlcv_dict)}종목")
 
     # ── 2. 종목풀 히스토리 구축 (1회) ──

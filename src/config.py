@@ -23,6 +23,7 @@ class Secrets(BaseSettings):
     kis_hts_id: str = Field(default="", alias="KIS_HTS_ID")
     slack_bot_token: str = Field(default="", alias="SLACK_BOT_TOKEN")
     slack_channel: str = Field(default="#auto-trading", alias="SLACK_CHANNEL")
+    slack_trade_channel: str = Field(default="#super_trader_buy_sell", alias="SLACK_TRADE_CHANNEL")
     anthropic_api_key: str = Field(default="", alias="ANTHROPIC_API_KEY")
     notion_token: str = Field(default="", alias="NOTION_TOKEN")
     notion_database_id: str = Field(default="", alias="NOTION_DATABASE_ID")
@@ -170,6 +171,9 @@ class BacktestConfig(BaseModel):
     initial_capital: int = 100_000_000
     commission_rate: float = 0.00015
     tax_rate: float = 0.0023
+    # walk-forward: 백테스트 중에 모델을 새로 학습해야 할 때
+    # 전체 OHLCV 의 앞 train_ratio 만 학습에 사용. (1.0 이면 기존처럼 전체)
+    train_ratio: float = 0.5
 
 
 class DatabaseConfig(BaseModel):
@@ -183,6 +187,13 @@ class LoggingConfig(BaseModel):
     retention: str = "30 days"
 
 
+class CodexConfig(BaseModel):
+    """Codex CLI 기반 자동 리뷰 설정."""
+    enabled: bool = False            # 라이브 데일리/백테스트 완료 시 자동 리뷰 트리거
+    daily_review: bool = True        # daily_report 이후 codex daily 실행
+    model: str = ""                  # codex 모델 override (빈 문자열이면 기본값)
+
+
 class AppConfig(BaseModel):
     kis: KISConfig = KISConfig()
     universe: UniverseConfig = UniverseConfig()
@@ -194,6 +205,7 @@ class AppConfig(BaseModel):
     backtest: BacktestConfig = BacktestConfig()
     database: DatabaseConfig = DatabaseConfig()
     logging: LoggingConfig = LoggingConfig()
+    codex: CodexConfig = CodexConfig()
 
 
 # ──────────────────────────────────────────────

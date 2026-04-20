@@ -15,11 +15,71 @@ from loguru import logger
 from src.config import get_secrets
 
 
+class MockSignalValidator:
+    """LLM 검증의 결정론적 시뮬레이션 (백테스트 비교용).
+
+    SignalValidator 의 프롬프트 규칙을 규칙 기반으로 재현:
+      BUY 보류: RSI >= 85 AND 1일 수익률 >= +10%
+      SELL 보류: 현재가>MA20 AND RSI>=40 AND 1일수익률>=-2% AND 5일수익률>=0% (모두 충족)
+      그 외는 확정
+    """
+
+    is_enabled = True
+
+    @staticmethod
+    def _context(df: pd.DataFrame) -> dict | None:
+        if df is None or len(df) < 20 or "close" not in df.columns:
+            return None
+        close = df["close"]
+        last = float(close.iloc[-1])
+        if close.iloc[-2] <= 0:
+            return None
+        ret_1d = (last / float(close.iloc[-2]) - 1.0) * 100.0
+        ret_5d = (last / float(close.iloc[-5]) - 1.0) * 100.0 if len(close) >= 5 else 0.0
+        ma20 = float(close.iloc[-20:].mean())
+        delta = close.diff().iloc[-14:]
+        gain = delta.where(delta > 0, 0.0).mean()
+        loss = (-delta.where(delta < 0, 0.0)).mean()
+        rsi = 100.0 - 100.0 / (1.0 + gain / loss) if loss > 0 else 50.0
+        return {"last": last, "ma20": ma20, "rsi": rsi, "ret_1d": ret_1d, "ret_5d": ret_5d}
+
+    def validate_signal(
+        self,
+        stock_code: str,
+        stock_name: str,
+        signal: str,
+        reason: str,
+        df: pd.DataFrame,
+    ) -> tuple[bool, str]:
+        ctx = self._context(df)
+        if ctx is None:
+            return True, "데이터 부족 → 확정 (mock)"
+        sig = signal.upper()
+        if sig == "BUY":
+            if ctx["rsi"] >= 85.0 and ctx["ret_1d"] >= 10.0:
+                return False, f"과열 보류 (RSI={ctx['rsi']:.0f}, 1일={ctx['ret_1d']:+.1f}%) (mock)"
+            return True, f"확정 (RSI={ctx['rsi']:.0f}, 1일={ctx['ret_1d']:+.1f}%) (mock)"
+        if sig == "SELL":
+            # 네 조건 모두 충족 시에만 "명백한 오판 SELL" 로 보류
+            if (
+                ctx["last"] > ctx["ma20"]
+                and ctx["rsi"] >= 40.0
+                and ctx["ret_1d"] >= -2.0
+                and ctx["ret_5d"] >= 0.0
+            ):
+                return False, (
+                    f"상승추세 중 경미한 눌림 → SELL 보류 "
+                    f"(MA20 위, RSI={ctx['rsi']:.0f}, 1d={ctx['ret_1d']:+.1f}%, 5d={ctx['ret_5d']:+.1f}%) (mock)"
+                )
+            return True, f"SELL 확정 (RSI={ctx['rsi']:.0f}, 1d={ctx['ret_1d']:+.1f}%) (mock)"
+        return True, "확정 (mock)"
+
+
 class SignalValidator:
     """LLM 기반 매매 시그널 검증"""
 
     API_URL = "https://api.anthropic.com/v1/messages"
-    DEFAULT_MODEL = "claude-sonnet-4-6-20250514"
+    DEFAULT_MODEL = "claude-sonnet-4-6"
 
     def __init__(self, model: str | None = None):
         self.api_key = get_secrets().anthropic_api_key
@@ -106,20 +166,27 @@ class SignalValidator:
         system_prompt = """당신은 한국 주식 시장 전문 트레이딩 검증 에이전트입니다.
 PPO RL 모델이 생성한 매매 시그널을 기술적 맥락에서 최종 검증합니다.
 
-핵심 원칙: RL 모델은 백테스트에서 검증된 전략입니다. LLM의 역할은 명백한 위험만 차단하는 것이지, 시그널을 과도하게 필터링하는 것이 아닙니다.
+핵심 원칙: RL 모델은 백테스트에서 검증된 전략입니다. LLM의 역할은 명백한 위험·오판만 차단하는 것이지, 시그널을 과도하게 필터링하는 것이 아닙니다. 기본은 확정. 명백한 오판만 보류.
 
-BUY 보류 조건 (모두 충족해야 보류):
+[BUY 보류 조건 — 모두 충족해야 보류]
    - RSI 85 이상 (극단적 과매수) AND
    - 1일 수익률 +10% 이상 급등 (과열)
    위 두 조건이 동시에 해당하지 않으면 확정하세요.
 
-SELL 시그널: 무조건 확정하세요. 손실 관리가 수익 추구보다 중요합니다.
+[SELL 보류 조건 — 아래 네 조건을 모두 충족하는 명백한 오판 SELL 만 보류. 하나라도 미충족이면 확정]
+   - 현재가 > MA20 (상승추세 유지) AND
+   - RSI 40 이상 (과매도 영역 아님) AND
+   - 1일 수익률 ≥ -2% (경미한 눌림 이하) AND
+   - 5일 수익률 ≥ 0% (최근 5일 하락 아님)
+
+SELL 확정 사유 예시 (하나라도 해당되면 확정):
+   - MA20 하향 이탈, RSI 고점 대비 반전, 5일 음수익률, 거래량 급증 + 음봉, 추세 약화
 
 판단 기준:
-- 애매하면 확정 (RL 모델 존중)
+- 애매하면 확정 (RL 모델 존중, 손실 관리 우선)
 - RSI 70~85 구간은 정상적 상승 모멘텀이므로 BUY 확정
-- 거래량 감소만으로 보류하지 마세요
-- 이동평균 아래라는 이유만으로 보류하지 마세요 (역추세 매매 가능)
+- 거래량 감소만으로 BUY 보류하지 마세요
+- 상승추세 중 일시 눌림에도 SELL 은 신중히 판단 — 네 조건 동시 충족이면 보류 가능
 
 반드시 첫 줄에 "확정" 또는 "보류" 중 하나만 쓰세요.
 두 번째 줄부터 간단한 이유를 쓰세요 (2줄 이내)."""

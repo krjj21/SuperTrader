@@ -50,6 +50,7 @@ class PortfolioBacktestEngine:
         tax_rate: float = 0.0023,
         max_positions: int = 30,
         stop_loss_pct: float | None = None,
+        llm_validator=None,
     ):
         self.initial_capital = initial_capital
         self.commission_rate = commission_rate
@@ -61,6 +62,8 @@ class PortfolioBacktestEngine:
             except Exception:
                 stop_loss_pct = 0.07
         self.stop_loss_pct = stop_loss_pct
+        # 선택적 LLM/mock 검증기 — 라이브와 동일한 필터를 백테스트에 적용
+        self.llm_validator = llm_validator
 
         self.cash = float(initial_capital)
         self.positions: dict[str, BacktestPosition] = {}
@@ -219,17 +222,19 @@ class PortfolioBacktestEngine:
                 if hasattr(strategy, "update_pool"):
                     strategy.update_pool(new_pool)
 
+                old_set = set(current_pool)
+                new_set = set(new_pool)
+
+                # 퇴출 종목은 모든 전략에서 T+1 SELL 강제 (풀 diff 기반)
+                for code in old_set - new_set:
+                    if code in self.positions:
+                        pending_orders.append((code, "", "sell"))
+
+                # 신규 편입 자동 BUY 는 commit_pool 기반 전략(factor_only)만 수행.
+                # 타이밍 전략은 generate_signal 이 진입을 결정한다.
                 if hasattr(strategy, "commit_pool"):
-                    old_set = set(current_pool)
-                    new_set = set(new_pool)
-
-                    for code in old_set - new_set:
-                        if code in self.positions:
-                            pending_orders.append((code, "", "sell"))
-
                     for code in new_set - old_set:
                         pending_orders.append((code, "", "buy"))
-
                     strategy.commit_pool()
 
                 current_pool = new_pool
@@ -261,21 +266,53 @@ class PortfolioBacktestEngine:
                     continue
 
                 df_until = ohlcv_dict[code].iloc[:idx]
-                signal = strategy.generate_signal(code, df_until)
+                try:
+                    signal = strategy.generate_signal(code, df_until, current_date=date)
+                except TypeError:
+                    signal = strategy.generate_signal(code, df_until)
 
                 if signal.signal == Signal.BUY and code not in self.positions:
                     if code in stopped_today:
                         continue
+                    if self.llm_validator is not None:
+                        try:
+                            confirmed, _ = self.llm_validator.validate_signal(
+                                code, signal.stock_name, "BUY", signal.reason, df_until,
+                            )
+                        except Exception:
+                            confirmed = True
+                        if not confirmed:
+                            continue
                     pending_orders.append((code, signal.stock_name, "buy"))
 
                 elif signal.signal == Signal.SELL and code in self.positions:
+                    # SELL 은 검증기에서도 항상 확정되지만 일관성을 위해 호출
+                    if self.llm_validator is not None:
+                        try:
+                            confirmed, _ = self.llm_validator.validate_signal(
+                                code, signal.stock_name, "SELL", signal.reason, df_until,
+                            )
+                        except Exception:
+                            confirmed = True
+                        if not confirmed:
+                            continue
                     pending_orders.append((code, "", "sell"))
 
             # ── 5. 전략-엔진 포지션 동기화 (RL 전략 등) ──
             if hasattr(strategy, "sync_positions"):
                 held = set(self.positions.keys())
                 prices = {c: self._get_close_cached(c, date) for c in held}
-                strategy.sync_positions(held, prices)
+                avg_prices = {c: p.avg_price for c, p in self.positions.items()}
+                entry_dates = {c: p.entry_date.replace("-", "") for c, p in self.positions.items()}
+                try:
+                    strategy.sync_positions(
+                        held, prices,
+                        avg_prices=avg_prices,
+                        entry_dates=entry_dates,
+                        current_date=date,
+                    )
+                except TypeError:
+                    strategy.sync_positions(held, prices)
 
             # ── 6. 일일 포트폴리오 가치 기록 (종가 기준) ──
             prices = {

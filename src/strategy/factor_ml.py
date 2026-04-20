@@ -32,12 +32,6 @@ class FactorMLStrategy(BaseStrategy):
     ) -> TradeSignal:
         price = int(df["close"].iloc[-1]) if len(df) > 0 else 0
 
-        if stock_code not in self._pool:
-            return TradeSignal(
-                signal=Signal.SELL, stock_code=stock_code, stock_name=stock_name,
-                price=price, strength=0.6, reason="종목풀 퇴출",
-            )
-
         if len(df) < 60:
             return TradeSignal(signal=Signal.HOLD, stock_code=stock_code, price=price)
 

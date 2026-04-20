@@ -25,6 +25,8 @@ class SlackNotifier:
         secrets = get_secrets()
         self.token = secrets.slack_bot_token
         self.channel = secrets.slack_channel
+        # 매매 전용 채널 (체결/시그널/손절/주문실패). 미설정이면 기본 채널 fallback.
+        self.trade_channel = secrets.slack_trade_channel or self.channel
         self._client = None
 
     @property
@@ -37,22 +39,23 @@ class SlackNotifier:
                 logger.warning("slack-sdk가 설치되지 않았습니다. pip install slack-sdk")
         return self._client
 
-    def _send(self, text: str, blocks: list[dict] | None = None) -> bool:
-        """메시지를 전송합니다."""
+    def _send(self, text: str, blocks: list[dict] | None = None, channel: str | None = None) -> bool:
+        """메시지를 전송합니다. channel 미지정 시 self.channel 사용."""
         if not self.token:
             logger.debug(f"[Slack 미설정] {text}")
             return False
 
+        target = channel or self.channel
         try:
             if self.client:
                 self.client.chat_postMessage(
-                    channel=self.channel,
+                    channel=target,
                     text=text,
                     blocks=blocks,
                 )
                 return True
         except Exception as e:
-            logger.error(f"Slack 전송 실패: {e}")
+            logger.error(f"Slack 전송 실패 ({target}): {e}")
         return False
 
     # ──────────────────────────────────────────
@@ -75,7 +78,7 @@ class SlackNotifier:
         if signal.stop_loss:
             text += f"• 손절가: {signal.stop_loss:,}원\n"
 
-        return self._send(text)
+        return self._send(text, channel=self.trade_channel)
 
     def notify_order_filled(self, order: Order) -> bool:
         """체결 완료 알림"""
@@ -90,7 +93,7 @@ class SlackNotifier:
             f"• 금액: {order.filled_qty * order.filled_price:,}원\n"
             f"• 주문번호: {order.order_no}"
         )
-        return self._send(text)
+        return self._send(text, channel=self.trade_channel)
 
     def notify_order_failed(self, order: Order) -> bool:
         """주문 실패 알림"""
@@ -99,7 +102,7 @@ class SlackNotifier:
             f"• 종목: {order.stock_code}\n"
             f"• 사유: {order.error_msg}"
         )
-        return self._send(text)
+        return self._send(text, channel=self.trade_channel)
 
     # ──────────────────────────────────────────
     # 시스템 알림
@@ -120,7 +123,7 @@ class SlackNotifier:
             f"• 매입가→현재가: {position.avg_price:,} → {position.current_price:,}원\n"
             f"• 수량: {position.quantity:,}주"
         )
-        return self._send(text)
+        return self._send(text, channel=self.trade_channel)
 
     def notify_kill_switch(self, reason: str) -> bool:
         """Kill switch 활성화 알림"""

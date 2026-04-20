@@ -36,7 +36,8 @@ def build_stock_pool(
     factor_report: pd.DataFrame | None = None,
     previous_pool: StockPool | None = None,
     ohlcv_dict: dict[str, pd.DataFrame] | None = None,
-) -> StockPool:
+    return_factors: bool = False,
+) -> StockPool | tuple[StockPool, pd.DataFrame]:
     """주어진 날짜의 종목풀을 구성합니다.
 
     Args:
@@ -125,4 +126,6 @@ def build_stock_pool(
         f"(신규 {len(entered)}, 퇴출 {len(exited)}) "
         f"date={date}"
     )
+    if return_factors:
+        return pool, factor_df
     return pool

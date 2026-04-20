@@ -33,14 +33,14 @@ def setup_logging():
 # ═══════════════════════════════════════════════
 # 백테스트 모드
 # ═══════════════════════════════════════════════
-def run_backtest(only_strategies: list[str] | None = None):
+def run_backtest(only_strategies: list[str] | None = None, review: bool = False, llm_filter: str | None = None):
     """팩터 + 타이밍 전략 비교 백테스트를 실행합니다."""
     config = get_config()
     logger.info("=" * 60)
     logger.info("SuperTrader 백테스트 시작")
     logger.info("=" * 60)
 
-    from src.data.market_data import get_universe, get_ohlcv_batch
+    from src.data.market_data import get_universe, get_ohlcv_batch, filter_by_listing_date
     from src.factors.alpha101 import compute_all_factors
     from src.factors.stock_pool import build_stock_pool
     from backtest.comparison import run_strategy_comparison
@@ -63,6 +63,9 @@ def run_backtest(only_strategies: list[str] | None = None):
     ohlcv_dict = get_ohlcv_batch(codes, start, end)
     logger.info(f"OHLCV 로드: {len(ohlcv_dict)}종목")
 
+    # 2-1. IPO 이후 상장 종목 제외 (부분적 생존자 편향 완화)
+    ohlcv_dict = filter_by_listing_date(ohlcv_dict, start)
+
     # 3. 리밸런싱 날짜 생성 (월초)
     logger.info("Step 3: 리밸런싱 스케줄 생성")
     rebalance_dates = _generate_rebalance_dates(start, end, config.factors.rebalance_freq)
@@ -83,22 +86,109 @@ def run_backtest(only_strategies: list[str] | None = None):
     comparison = run_strategy_comparison(
         ohlcv_dict, pool_history, rebalance_dates, model_paths,
         only_strategies=only_strategies,
+        llm_filter=llm_filter,
     )
 
     if not comparison.empty:
         print_comparison_table(comparison)
         logger.info("백테스트 완료!")
+
+        if review:
+            _trigger_codex_backtest_review(comparison)
     else:
         logger.warning("백테스트 결과 없음")
+
+
+def _trigger_codex_backtest_review(comparison: pd.DataFrame) -> None:
+    """백테스트 완료 후 codex 리뷰를 트리거합니다."""
+    import subprocess
+
+    reports_dir = Path("reports")
+    reports_dir.mkdir(exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    csv_path = reports_dir / f"backtest_comparison_{stamp}.csv"
+    comparison.to_csv(csv_path, encoding="utf-8")
+    logger.info(f"비교 테이블 저장: {csv_path}")
+
+    cmd = [
+        sys.executable,
+        "scripts/codex_review.py",
+        "backtest",
+        "--comparison", str(csv_path),
+    ]
+    logger.info(f"Codex 리뷰 실행: {' '.join(cmd)}")
+    try:
+        subprocess.run(cmd, check=False)
+    except FileNotFoundError:
+        logger.warning("codex CLI 미설치 — 리뷰 단계 건너뜀")
+
+
+def _trigger_codex_daily_review(model: str = "") -> None:
+    """일일 리포트 이후 codex daily 리뷰를 트리거합니다."""
+    import subprocess
+
+    cmd = [sys.executable, "scripts/codex_review.py", "daily"]
+    if model:
+        cmd.extend(["--model", model])
+    logger.info(f"Codex 일일 리뷰 실행: {' '.join(cmd)}")
+    try:
+        subprocess.run(cmd, check=False)
+    except FileNotFoundError:
+        logger.warning("codex CLI 미설치 — 리뷰 단계 건너뜀")
+    except Exception as e:
+        logger.warning(f"Codex 일일 리뷰 실패: {e}")
+
+
+def _forward_returns_between(
+    ohlcv_dict: dict[str, pd.DataFrame],
+    from_date: str,
+    to_date: str,
+) -> pd.Series:
+    """from_date 의 close 대비 to_date 의 close 수익률을 종목별로 계산합니다."""
+    fd = pd.Timestamp(from_date.replace("-", ""))
+    td = pd.Timestamp(to_date.replace("-", ""))
+    result: dict[str, float] = {}
+    for code, df in ohlcv_dict.items():
+        if "date" not in df.columns or df.empty:
+            continue
+        sub = df[(df["date"] >= fd) & (df["date"] <= td)]
+        if len(sub) < 2:
+            continue
+        p0 = float(sub["close"].iloc[0])
+        p1 = float(sub["close"].iloc[-1])
+        if p0 > 0:
+            result[code] = (p1 / p0) - 1.0
+    return pd.Series(result)
 
 
 def _build_pool_history_factor_based(
     ohlcv_dict: dict[str, pd.DataFrame],
     rebalance_dates: list[str],
     build_stock_pool_fn,
+    use_cache: bool = True,
 ) -> dict[str, list[str]]:
-    """팩터 파이프라인 기반으로 종목풀을 구성합니다 (라이브 매매와 동일)."""
-    pool_history = {}
+    """팩터 파이프라인 기반으로 종목풀을 구성합니다 (라이브 매매와 동일).
+
+    rolling IC(최근 ic_lookback 리밸런싱) 을 계산해 `ic_weighted` 가중이
+    실제로 작동하도록 factor_report 를 누적·전달한다.
+
+    동일 config 로 이미 빌드한 기록이 있으면 data/pool_cache/ 에서 로드한다.
+    """
+    if use_cache:
+        from src.factors import pool_cache
+        cached = pool_cache.load(expected_dates=rebalance_dates)
+        if cached is not None:
+            return cached
+
+    from src.factors.validity import validate_all_factors
+
+    config = get_config()
+    ic_lookback = int(config.factors.ic_lookback)
+
+    pool_history: dict[str, list[str]] = {}
+    factor_history: dict[str, pd.DataFrame] = {}
+    return_history: dict[str, pd.Series] = {}
+    factor_report: pd.DataFrame | None = None
     previous_pool = None
 
     for i, date in enumerate(rebalance_dates):
@@ -106,11 +196,41 @@ def _build_pool_history_factor_based(
         date_fmt = date.replace("-", "")
         logger.info(f"  종목풀 구성 {i+1}/{len(rebalance_dates)}: {date}")
 
-        pool = build_stock_pool_fn(
+        # 이전 리밸런싱 기간의 forward return 을 누적
+        if i > 0:
+            prev_date = rebalance_dates[i - 1].replace("-", "")
+            if prev_date in factor_history:
+                ret = _forward_returns_between(ohlcv_dict, prev_date, date_fmt)
+                if not ret.empty:
+                    return_history[prev_date] = ret
+
+        # ic_lookback 기간 이상 누적되면 rolling IC 리포트 재계산
+        if len(return_history) >= ic_lookback:
+            recent = sorted(return_history.keys())[-ic_lookback:]
+            rolling_fh = {d: factor_history[d] for d in recent if d in factor_history}
+            rolling_rh = {d: return_history[d] for d in recent}
+            if len(rolling_fh) >= max(3, ic_lookback // 2):
+                try:
+                    factor_report = validate_all_factors(
+                        rolling_fh, rolling_rh,
+                        min_ir=config.factors.min_ir,
+                    )
+                except Exception as e:
+                    logger.warning(f"IC 리포트 계산 실패 ({date}): {e}")
+
+        result = build_stock_pool_fn(
             date=date_fmt,
             previous_pool=previous_pool,
             ohlcv_dict=ohlcv_dict,
+            factor_report=factor_report,
+            return_factors=True,
         )
+        if isinstance(result, tuple):
+            pool, factor_df = result
+            if factor_df is not None and not factor_df.empty:
+                factor_history[date_fmt] = factor_df
+        else:
+            pool = result
 
         if pool.codes:
             pool_history[date] = pool.codes
@@ -123,6 +243,13 @@ def _build_pool_history_factor_based(
             else:
                 pool_history[date] = list(ohlcv_dict.keys())[:30]
                 logger.warning(f"  {date}: 팩터 계산 실패, 가용 종목으로 대체")
+
+    if use_cache and pool_history:
+        try:
+            from src.factors import pool_cache
+            pool_cache.save(pool_history, extra_meta={"n_stocks_loaded": len(ohlcv_dict)})
+        except Exception as e:
+            logger.warning(f"종목풀 캐시 저장 실패: {e}")
 
     return pool_history
 
@@ -157,14 +284,34 @@ def _generate_rebalance_dates(start: str, end: str, freq: str) -> list[str]:
     return dates
 
 
+def _split_ohlcv_prefix(ohlcv_dict: dict[str, pd.DataFrame], ratio: float) -> dict[str, pd.DataFrame]:
+    """각 종목 OHLCV 의 앞 `ratio` 비율만 남겨 반환합니다 (walk-forward 학습용)."""
+    if ratio >= 1.0:
+        return ohlcv_dict
+    out = {}
+    for code, df in ohlcv_dict.items():
+        n = int(len(df) * ratio)
+        if n > 60:  # 최소 학습 가능 길이
+            out[code] = df.iloc[:n].reset_index(drop=True)
+    return out
+
+
 def _train_models_if_needed(ohlcv_dict: dict) -> dict[str, str]:
-    """ML 모델이 없으면 학습합니다."""
+    """ML 모델이 없으면 학습합니다 (walk-forward prefix 만 사용)."""
     config = get_config()
     model_dir = Path("models")
     model_dir.mkdir(exist_ok=True)
 
     model_paths = {}
     models_to_train = ["decision_tree", "xgboost", "rl"]  # DT, XGB, RL 학습
+
+    train_ratio = float(getattr(config.backtest, "train_ratio", 1.0))
+    train_ohlcv = _split_ohlcv_prefix(ohlcv_dict, train_ratio) if train_ratio < 1.0 else ohlcv_dict
+    if train_ratio < 1.0:
+        logger.info(
+            f"walk-forward 학습: 전체의 {train_ratio*100:.0f}% 앞부분만 사용 "
+            f"({len(train_ohlcv)}/{len(ohlcv_dict)}종목 통과)"
+        )
 
     for model_type in models_to_train:
         ext = ".pkl" if model_type in ("decision_tree", "xgboost", "lightgbm") else ".pt"
@@ -177,7 +324,7 @@ def _train_models_if_needed(ohlcv_dict: dict) -> dict[str, str]:
 
         logger.info(f"모델 학습 시작: {model_type}")
         from src.timing.trainer import train_timing_model
-        result = train_timing_model(ohlcv_dict, model_type, save_path=path)
+        result = train_timing_model(train_ohlcv, model_type, save_path=path)
 
         if "error" not in result:
             model_paths[model_type] = path
@@ -354,6 +501,35 @@ def run_live():
 
             # 종목풀 내 종목에 대해 시그널 체크
             pool_codes = list(strategy._pool) if hasattr(strategy, '_pool') else []
+
+            # 풀에서 퇴출된 보유 종목은 강제 매도 (리밸런싱 누락 방지)
+            exited_codes = held_codes - set(pool_codes)
+            if exited_codes:
+                logger.info(f"풀 퇴출 종목 강제 매도: {len(exited_codes)}종목")
+                for pos in balance.positions:
+                    if pos.stock_code not in exited_codes:
+                        continue
+                    try:
+                        order = order_mgr.sell(pos.stock_code, pos.quantity)
+                        if order.order_no:
+                            notifier.notify_order_filled(order)
+                            logger.info(
+                                f"풀 퇴출 매도: {pos.stock_name}({pos.stock_code}) "
+                                f"{pos.quantity}주"
+                            )
+                            from src.db.models import remove_holding
+                            remove_holding(pos.stock_code)
+                            save_signal_log(
+                                stock_code=pos.stock_code,
+                                stock_name=pos.stock_name,
+                                signal="SELL",
+                                decision="확정",
+                                reason="종목풀 퇴출 강제 매도",
+                                signal_type="pool_exit",
+                            )
+                            held_codes.discard(pos.stock_code)
+                    except Exception as e:
+                        logger.error(f"풀 퇴출 매도 실패: {pos.stock_code} - {e}")
             signal_summary = {"BUY": 0, "SELL": 0, "HOLD": 0, "error": 0}
             for code in pool_codes:
                 ohlcv = client.get_daily_ohlcv(code)
@@ -483,6 +659,10 @@ def run_live():
                 trades=today_trades,
                 feedback=feedback or "",
             )
+
+            # Codex CLI 리뷰 (설정에서 활성화된 경우)
+            if config.codex.enabled and config.codex.daily_review:
+                _trigger_codex_daily_review(config.codex.model)
 
         except Exception as e:
             logger.error(f"리포트 오류: {e}")
@@ -751,6 +931,15 @@ def main():
         choices=["alpha101", "alpha158", "both"],
         help="팩터 모듈 선택 (기본: config 설정 사용)",
     )
+    parser.add_argument(
+        "--review", action="store_true",
+        help="완료 후 codex CLI 로 자동 리뷰 (backtest 모드)",
+    )
+    parser.add_argument(
+        "--llm-filter", type=str, default=None,
+        choices=["mock", "real"],
+        help="백테스트에 LLM 검증 필터 적용 (mock=규칙기반, real=Claude API). 원신호 vs 필터 적용 비교용",
+    )
 
     args = parser.parse_args()
 
@@ -761,7 +950,7 @@ def main():
     setup_logging()
 
     if args.mode == "backtest":
-        run_backtest(only_strategies=args.strategy)
+        run_backtest(only_strategies=args.strategy, review=args.review, llm_filter=args.llm_filter)
     elif args.mode == "live":
         run_live()
     elif args.mode == "train":

@@ -29,20 +29,29 @@ class FactorRLStrategy(BaseStrategy):
         self._pool: set[str] = set()
         # 포지션 추적: {종목코드: {"entry_price": float, "entry_date": str}}
         self._positions: dict[str, dict] = {}
+        # 백테스트용 기준일 (라이브에서는 None → datetime.now() 사용)
+        self._current_date: str | None = None
 
     def update_pool(self, codes: list[str]) -> None:
         self._pool = set(codes)
 
     @staticmethod
-    def _business_days_held(entry_date: str) -> int:
-        """매수일로부터 영업일 기준 보유 일수를 계산합니다."""
-        from datetime import datetime
+    def _business_days_held(entry_date: str, reference_date: str | None = None) -> int:
+        """매수일로부터 영업일 기준 보유 일수를 계산합니다.
+
+        Args:
+            entry_date: 매수일 (YYYYMMDD)
+            reference_date: 기준일 (YYYYMMDD 또는 YYYY-MM-DD). 백테스트용. None 이면 현재 시각.
+        """
+        from datetime import datetime, timedelta
         try:
             entry = datetime.strptime(entry_date, "%Y%m%d")
-            today = datetime.now()
+            if reference_date:
+                today = datetime.strptime(reference_date.replace("-", ""), "%Y%m%d")
+            else:
+                today = datetime.now()
             days = 0
             current = entry
-            from datetime import timedelta
             while current < today:
                 current += timedelta(days=1)
                 if current.weekday() < 5:  # 월~금
@@ -94,15 +103,20 @@ class FactorRLStrategy(BaseStrategy):
         return datetime.now().strftime("%Y%m%d")
 
     def sync_positions(self, held_codes: set[str], prices: dict[str, float] | None = None,
-                       avg_prices: dict[str, float] | None = None) -> None:
+                       avg_prices: dict[str, float] | None = None,
+                       entry_dates: dict[str, str] | None = None,
+                       current_date: str | None = None) -> None:
         """보유 종목과 동기화합니다.
 
         Args:
             held_codes: 보유 종목 코드 집합
             prices: {종목코드: 현재가}
             avg_prices: {종목코드: 매수평균가} — 매수일 조회/추정용
+            entry_dates: {종목코드: 매수일(YYYYMMDD)} — 백테스트 엔진이 직접 전달
+            current_date: 백테스트 기준일 (YYYYMMDD or YYYY-MM-DD)
         """
-        from datetime import datetime
+        if current_date:
+            self._current_date = current_date.replace("-", "")
         # 매도된 종목 제거
         for code in list(self._positions):
             if code not in held_codes:
@@ -113,7 +127,11 @@ class FactorRLStrategy(BaseStrategy):
                 cur_price = prices.get(code, 0) if prices else 0
                 avg_price = avg_prices.get(code, 0) if avg_prices else 0
                 entry_price = float(avg_price) if avg_price > 0 else (float(cur_price) if cur_price > 0 else 1.0)
-                entry_date = self._resolve_buy_date(code, entry_price)
+                # 우선순위: 엔진 제공 entry_date > DB/일봉 추정 > 오늘
+                if entry_dates and code in entry_dates and entry_dates[code]:
+                    entry_date = entry_dates[code].replace("-", "")
+                else:
+                    entry_date = self._resolve_buy_date(code, entry_price)
                 self._positions[code] = {
                     "entry_price": entry_price,
                     "entry_date": entry_date,
@@ -121,16 +139,12 @@ class FactorRLStrategy(BaseStrategy):
 
     def generate_signal(
         self, stock_code: str, df: pd.DataFrame, stock_name: str = "",
+        current_date: str | None = None,
     ) -> TradeSignal:
         price = int(df["close"].iloc[-1]) if len(df) > 0 else 0
 
-        if stock_code not in self._pool:
-            if stock_code in self._positions:
-                del self._positions[stock_code]
-            return TradeSignal(
-                signal=Signal.SELL, stock_code=stock_code, stock_name=stock_name,
-                price=price, strength=0.6, reason="종목풀 퇴출",
-            )
+        if current_date:
+            self._current_date = current_date.replace("-", "")
 
         if len(df) < 60:
             return TradeSignal(signal=Signal.HOLD, stock_code=stock_code, price=price)
@@ -143,7 +157,7 @@ class FactorRLStrategy(BaseStrategy):
 
         if holding:
             unrealized_pnl = (price / pos["entry_price"] - 1.0) if pos["entry_price"] > 0 else 0.0
-            holding_days = self._business_days_held(pos["entry_date"])
+            holding_days = self._business_days_held(pos["entry_date"], self._current_date)
 
         try:
             prediction = self.predictor.predict_with_position(
@@ -159,9 +173,10 @@ class FactorRLStrategy(BaseStrategy):
 
         if prediction == 1 and not holding:
             from datetime import datetime
+            entry_date = self._current_date or datetime.now().strftime("%Y%m%d")
             self._positions[stock_code] = {
                 "entry_price": float(price),
-                "entry_date": datetime.now().strftime("%Y%m%d"),
+                "entry_date": entry_date,
             }
             return TradeSignal(
                 signal=Signal.BUY, stock_code=stock_code, stock_name=stock_name,

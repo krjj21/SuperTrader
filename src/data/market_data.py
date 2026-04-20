@@ -52,17 +52,25 @@ def get_universe(date: str | None = None) -> pd.DataFrame:
     df["market_cap"] = pd.to_numeric(listing.get("Marcap", 0), errors="coerce").fillna(0).astype(int)
     df["volume"] = pd.to_numeric(listing.get("Volume", 0), errors="coerce").fillna(0).astype(int)
 
-    # 필터링
+    # 필터링: market_cap 먼저 적용
     df = df[df["market_cap"] >= config.min_market_cap]
-    df = df[df["volume"] >= config.min_avg_volume]
 
-    # 관리종목, 우선주, ETF 등 제외
+    # 관리종목, 우선주, ETF 등 제외 (volume 필터 전에 먼저)
     df = df[~df["name"].str.contains("스팩|리츠|ETF|ETN", na=False)]
-    # 우선주 코드: 끝이 5,7,9,K,L
     df = df[~df["code"].str[-1].isin(["5", "7", "9", "K", "L"])]
 
+    # 거래량 필터 — FDR Volume 은 "당일 실시간 거래량" 이라 시장 초반에는
+    # 대부분 종목이 기준 미달. 결과가 기대치 이하면 필터 완화.
+    filtered = df[df["volume"] >= config.min_avg_volume]
+    if len(filtered) >= 30:
+        df = filtered
+        logger.info(f"유니버스 구성: {len(df)}종목 ({config.market})")
+    else:
+        logger.warning(
+            f"유니버스 거래량 필터 통과 {len(filtered)}종목 — 시장 초반/거래 부족 의심. "
+            f"volume 필터 스킵 (market_cap 만 적용, 결과 {len(df)}종목)"
+        )
     df = df.sort_values("market_cap", ascending=False).reset_index(drop=True)
-    logger.info(f"유니버스 구성: {len(df)}종목 ({config.market})")
     return df
 
 
@@ -128,6 +136,46 @@ def get_ohlcv(
 
     df = df.dropna().reset_index(drop=True)
     return df
+
+
+def filter_by_listing_date(
+    ohlcv_dict: dict[str, pd.DataFrame],
+    start: str,
+    grace_days: int = 30,
+) -> dict[str, pd.DataFrame]:
+    """backtest 시작일 이후에 IPO 된 종목을 제외합니다.
+
+    각 종목의 OHLCV 가 `start` 이전(또는 grace_days 이내) 에 시작하면 유지.
+    이후 IPO 는 lookahead/생존자 편향을 만드므로 제외.
+
+    Args:
+        ohlcv_dict: {종목코드: OHLCV DataFrame}
+        start: 기준일 (YYYYMMDD 또는 YYYY-MM-DD)
+        grace_days: 기준일 이후 grace_days 이내 상장한 종목도 제외
+
+    Returns:
+        필터링된 dict
+    """
+    start_fmt = pd.Timestamp(start.replace("-", ""))
+    cutoff = start_fmt + pd.Timedelta(days=grace_days)
+
+    kept = {}
+    dropped_codes = []
+    for code, df in ohlcv_dict.items():
+        if df.empty or "date" not in df.columns:
+            continue
+        first = pd.to_datetime(df["date"].iloc[0])
+        if first <= cutoff:
+            kept[code] = df
+        else:
+            dropped_codes.append((code, first.strftime("%Y-%m-%d")))
+
+    if dropped_codes:
+        logger.info(
+            f"IPO 이후 상장 종목 제외: {len(dropped_codes)}종목 "
+            f"(예: {dropped_codes[:3]})"
+        )
+    return kept
 
 
 def get_ohlcv_batch(

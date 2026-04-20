@@ -21,6 +21,7 @@ def run_strategy_comparison(
     rebalance_dates: list[str],
     model_paths: dict[str, str] | None = None,
     only_strategies: list[str] | None = None,
+    llm_filter: str | None = None,
 ) -> pd.DataFrame:
     """여러 전략을 동일 조건에서 비교합니다.
 
@@ -70,6 +71,21 @@ def run_strategy_comparison(
     if only_strategies:
         strategies = {k: v for k, v in strategies.items() if k in only_strategies}
 
+    # LLM 필터 설정: "mock"=규칙 기반, "real"=실제 Claude API, None=비활성
+    validator = None
+    if llm_filter == "mock":
+        from src.timing.llm_validator import MockSignalValidator
+        validator = MockSignalValidator()
+        logger.info("LLM 필터(mock) 활성 — 라이브와 동일 규칙을 백테스트에 적용")
+    elif llm_filter == "real":
+        from src.timing.llm_validator import SignalValidator
+        validator = SignalValidator()
+        if not validator.is_enabled:
+            logger.warning("ANTHROPIC_API_KEY 없음 — LLM 필터 비활성")
+            validator = None
+        else:
+            logger.warning("LLM 필터(real) 활성 — 시간/비용 증가 주의")
+
     results = {}
     equity_curves = {}
 
@@ -81,6 +97,7 @@ def run_strategy_comparison(
             commission_rate=config.backtest.commission_rate,
             tax_rate=config.backtest.tax_rate,
             max_positions=config.risk.max_total_positions,
+            llm_validator=validator,
         )
 
         result = engine.run(strategy, ohlcv_dict, pool_history, rebalance_dates)

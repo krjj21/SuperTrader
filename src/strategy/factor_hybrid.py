@@ -37,16 +37,21 @@ class FactorHybridStrategy(BaseStrategy):
         self._pool: set[str] = set()
         # 포지션 추적 (RL 레이어용)
         self._positions: dict[str, dict] = {}
+        # 백테스트용 기준일 (라이브에서는 None)
+        self._current_date: str | None = None
 
     def update_pool(self, codes: list[str]) -> None:
         self._pool = set(codes)
 
     @staticmethod
-    def _business_days_held(entry_date: str) -> int:
+    def _business_days_held(entry_date: str, reference_date: str | None = None) -> int:
         from datetime import datetime, timedelta
         try:
             entry = datetime.strptime(entry_date, "%Y%m%d")
-            today = datetime.now()
+            if reference_date:
+                today = datetime.strptime(reference_date.replace("-", ""), "%Y%m%d")
+            else:
+                today = datetime.now()
             days = 0
             current = entry
             while current < today:
@@ -87,8 +92,11 @@ class FactorHybridStrategy(BaseStrategy):
         return datetime.now().strftime("%Y%m%d")
 
     def sync_positions(self, held_codes: set[str], prices: dict[str, float] | None = None,
-                       avg_prices: dict[str, float] | None = None) -> None:
-        from datetime import datetime
+                       avg_prices: dict[str, float] | None = None,
+                       entry_dates: dict[str, str] | None = None,
+                       current_date: str | None = None) -> None:
+        if current_date:
+            self._current_date = current_date.replace("-", "")
         for code in list(self._positions):
             if code not in held_codes:
                 del self._positions[code]
@@ -97,7 +105,10 @@ class FactorHybridStrategy(BaseStrategy):
                 cur_price = prices.get(code, 0) if prices else 0
                 avg_price = avg_prices.get(code, 0) if avg_prices else 0
                 entry_price = float(avg_price) if avg_price > 0 else (float(cur_price) if cur_price > 0 else 1.0)
-                entry_date = self._resolve_buy_date(code, entry_price)
+                if entry_dates and code in entry_dates and entry_dates[code]:
+                    entry_date = entry_dates[code].replace("-", "")
+                else:
+                    entry_date = self._resolve_buy_date(code, entry_price)
                 self._positions[code] = {
                     "entry_price": entry_price,
                     "entry_date": entry_date,
@@ -105,17 +116,12 @@ class FactorHybridStrategy(BaseStrategy):
 
     def generate_signal(
         self, stock_code: str, df: pd.DataFrame, stock_name: str = "",
+        current_date: str | None = None,
     ) -> TradeSignal:
         price = int(df["close"].iloc[-1]) if len(df) > 0 else 0
 
-        # 종목풀 퇴출 → 무조건 SELL
-        if stock_code not in self._pool:
-            if stock_code in self._positions:
-                del self._positions[stock_code]
-            return TradeSignal(
-                signal=Signal.SELL, stock_code=stock_code, stock_name=stock_name,
-                price=price, strength=0.6, reason="종목풀 퇴출",
-            )
+        if current_date:
+            self._current_date = current_date.replace("-", "")
 
         if len(df) < 60:
             return TradeSignal(signal=Signal.HOLD, stock_code=stock_code, price=price)
@@ -138,7 +144,7 @@ class FactorHybridStrategy(BaseStrategy):
 
         if holding:
             unrealized_pnl = (price / pos["entry_price"] - 1.0) if pos["entry_price"] > 0 else 0.0
-            holding_days = self._business_days_held(pos["entry_date"])
+            holding_days = self._business_days_held(pos["entry_date"], self._current_date)
 
         try:
             rl_signal = self.rl_predictor.predict_with_position(
@@ -167,9 +173,10 @@ class FactorHybridStrategy(BaseStrategy):
         if ml_signal == 1 and not holding:
             if rl_signal == 1:
                 from datetime import datetime
+                entry_date = self._current_date or datetime.now().strftime("%Y%m%d")
                 self._positions[stock_code] = {
                     "entry_price": float(price),
-                    "entry_date": datetime.now().strftime("%Y%m%d"),
+                    "entry_date": entry_date,
                 }
                 return TradeSignal(
                     signal=Signal.BUY, stock_code=stock_code, stock_name=stock_name,
