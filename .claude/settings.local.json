@@ -4,7 +4,19 @@
       "Bash(python:*)",
       "Bash(ls /mnt/e/SuperTrader/venv/bin/python*)",
       "Bash(ls /mnt/e/SuperTrader/venv/Scripts/python*)",
-      "Bash(/mnt/e/SuperTrader/venv/Scripts/python.exe:*)"
+      "Bash(/mnt/e/SuperTrader/venv/Scripts/python.exe:*)",
+      "Bash(codex --version)",
+      "Bash(codex --help)",
+      "Bash(codex exec *)",
+      "mcp__claude_ai_Slack__slack_search_channels",
+      "mcp__claude_ai_Slack__slack_read_channel",
+      "Bash(curl -s http://127.0.0.1:5000/api/pipeline)",
+      "Bash(curl -sS -v http://127.0.0.1:5000/api/pipeline)",
+      "Bash(curl -sS http://192.168.0.20:5000/api/pipeline)",
+      "Bash(curl -sS http://192.168.0.20:5000/)",
+      "Bash(curl -sS http://192.168.0.20:5000/api/status)",
+      "Bash(curl -sS http://192.168.0.20:5000/api/scan_summary)",
+      "mcp__claude_ai_Slack__slack_send_message"
     ]
   }
 }

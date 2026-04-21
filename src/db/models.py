@@ -10,7 +10,7 @@ from pathlib import Path
 
 from sqlalchemy import (
     Column, Integer, Float, String, DateTime, Boolean,
-    create_engine, event,
+    create_engine, event, inspect, text,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
@@ -84,7 +84,9 @@ class SignalLog(Base):
     signal = Column(String(4), nullable=False)          # BUY / SELL
     decision = Column(String(10), nullable=False)        # 확정 / 보류
     reason = Column(String(1000), default="")
-    signal_type = Column(String(10), default="llm")      # llm / summary
+    signal_type = Column(String(16), default="llm")      # llm / summary / pool_exit / llm_backtest
+    run_id = Column(String(64), default="", index=True)  # 빈 문자열=라이브, bt_<strategy>_<ts>=백테스트
+    signal_date = Column(String(10), default="", index=True)  # YYYY-MM-DD (백테스트 시그널 발생 당일)
     created_at = Column(DateTime, default=datetime.now, index=True)
 
 
@@ -142,7 +144,28 @@ def init_db(db_path: str = "data/trading.db") -> None:
         cursor.close()
 
     Base.metadata.create_all(_engine, checkfirst=True)
+    _migrate_signal_logs(_engine)
     _SessionFactory = sessionmaker(bind=_engine)
+
+
+def _migrate_signal_logs(engine) -> None:
+    """기존 DB의 signal_logs 테이블에 run_id/signal_date 컬럼이 없으면 추가한다."""
+    inspector = inspect(engine)
+    if "signal_logs" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("signal_logs")}
+    alters: list[str] = []
+    if "run_id" not in existing:
+        alters.append("ALTER TABLE signal_logs ADD COLUMN run_id VARCHAR(64) DEFAULT ''")
+    if "signal_date" not in existing:
+        alters.append("ALTER TABLE signal_logs ADD COLUMN signal_date VARCHAR(10) DEFAULT ''")
+    if not alters:
+        return
+    with engine.begin() as conn:
+        for stmt in alters:
+            conn.execute(text(stmt))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_signal_logs_run_id ON signal_logs(run_id)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_signal_logs_signal_date ON signal_logs(signal_date)"))
 
 
 def get_session() -> Session:
@@ -300,8 +323,13 @@ def save_signal_log(
     decision: str,
     reason: str = "",
     signal_type: str = "llm",
+    run_id: str = "",
+    signal_date: str = "",
 ) -> SignalLog:
-    """시그널 이력을 기록합니다."""
+    """시그널 이력을 기록합니다.
+
+    run_id/signal_date 는 백테스트용. 라이브는 기본값 빈 문자열 유지.
+    """
     session = get_session()
     try:
         log = SignalLog(
@@ -311,6 +339,8 @@ def save_signal_log(
             decision=decision,
             reason=reason[:1000],
             signal_type=signal_type,
+            run_id=run_id,
+            signal_date=signal_date,
         )
         session.add(log)
         session.commit()

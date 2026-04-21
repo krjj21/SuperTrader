@@ -233,13 +233,19 @@ class RLTimingModel:
             "entropy": total_entropy / n_updates,
         }
 
-    def collect_episode(self, env, df: pd.DataFrame, deterministic: bool = False) -> dict:
+    def collect_episode(
+        self, env, df: pd.DataFrame,
+        deterministic: bool = False,
+        reset_env: bool = True,
+    ) -> dict:
         """에피소드를 수집합니다 (PPO rollout).
 
         Args:
             deterministic: True이면 argmax 정책 (평가용), False이면 확률적 샘플링 (학습용)
+            reset_env: True(기본)이면 env.reset(df) 호출. False 면 외부에서 미리 reset 한
+                       상태 사용 (SAPPO 용 sentiment_series 주입 등).
         """
-        state = env.reset(df)
+        state = env.reset(df) if reset_env else env._get_state()
         states, actions, rewards, log_probs, values, dones = [], [], [], [], [], []
 
         done = False

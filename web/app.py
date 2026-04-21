@@ -141,6 +141,20 @@ def api_status():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+STRATEGY_DESCRIPTIONS = {
+    "factor_only": "팩터 상위 종목 월간 홀딩 (타이밍 없음)",
+    "factor_macd": "팩터 풀 + MACD 골든/데드크로스 타이밍",
+    "factor_kdj": "팩터 풀 + KDJ 과매수/과매도 타이밍",
+    "factor_decision_tree": "팩터 풀 + Decision Tree 타이밍",
+    "factor_xgboost": "팩터 풀 + XGBoost 타이밍",
+    "factor_lightgbm": "팩터 풀 + LightGBM 타이밍",
+    "factor_lstm": "팩터 풀 + LSTM 타이밍",
+    "factor_transformer": "팩터 풀 + Transformer 타이밍",
+    "factor_rl": "팩터 풀 + PPO RL 타이밍",
+    "factor_hybrid": "팩터 풀 + XGBoost(알파) AND PPO RL(리스크 필터)",
+}
+
+
 @app.route("/api/pipeline")
 def api_pipeline():
     """파이프라인 상태 API"""
@@ -148,19 +162,84 @@ def api_pipeline():
         config = get_config()
         runtime = get_runtime_status()
 
+        strategy = runtime.strategy if runtime else config.strategy.name
+        description = STRATEGY_DESCRIPTIONS.get(strategy, "-")
+        rl_cfg = config.timing.rl
+
         return jsonify({
             "ok": True,
-            "strategy": runtime.strategy if runtime else config.strategy.name,
+            "strategy": strategy,
+            "strategy_description": description,
+            "factor_module": config.factors.factor_module,
+            "rebalance_freq": config.factors.rebalance_freq,
             "pool_size": runtime.pool_size if runtime else config.factors.top_n,
             "llm_enabled": runtime.llm_enabled if runtime else bool(get_secrets().anthropic_api_key),
             "kill_switch": runtime.kill_switch if runtime else False,
             "check_interval": runtime.check_interval if runtime else config.schedule.check_interval_sec,
             "daily_loss_limit": runtime.daily_loss_limit if runtime else config.risk.daily_loss_limit_pct * 100,
             "max_positions": runtime.max_positions if runtime else config.risk.max_total_positions,
+            "buy_action_threshold": rl_cfg.buy_action_threshold,
+            "sell_action_threshold": rl_cfg.sell_action_threshold,
+            "sentiment_lambda": getattr(rl_cfg, "sentiment_lambda", 0.0),
+            "sentiment_source": getattr(rl_cfg, "sentiment_source", "off"),
             "updated_at": (
                 runtime.updated_at.strftime("%Y-%m-%d %H:%M:%S")
                 if runtime and runtime.updated_at else None
             ),
+        })
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/scan_summary")
+def api_scan_summary():
+    """최근 사이클의 BUY/SELL/HOLD 스캔 집계.
+
+    check_signals 말미에 `signal_type='summary'` 로 저장된 레코드에서 decision 문자열을
+    파싱한다. 형식: 'B:11 S:1 H:18'.
+    """
+    import re
+    from sqlalchemy import desc
+    try:
+        from src.db.models import SignalLog, get_session
+        session = get_session()
+        try:
+            row = (
+                session.query(SignalLog)
+                .filter(SignalLog.signal_type == "summary")
+                .order_by(desc(SignalLog.created_at))
+                .first()
+            )
+        finally:
+            session.close()
+
+        if row is None:
+            return jsonify({
+                "ok": True,
+                "time": None,
+                "buy": 0, "sell": 0, "hold": 0, "error": 0, "pool_size": 0,
+            })
+
+        decision = row.decision or ""
+        m = re.match(r"B:(\d+)\s+S:(\d+)\s+H:(\d+)", decision)
+        buy, sell, hold = (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else (0, 0, 0)
+
+        err = 0
+        err_match = re.search(r"오류:\s*(\d+)", row.reason or "")
+        if err_match:
+            err = int(err_match.group(1))
+
+        pool_match = re.match(r"(\d+)", row.stock_name or "")
+        pool_size = int(pool_match.group(1)) if pool_match else (buy + sell + hold)
+
+        return jsonify({
+            "ok": True,
+            "time": row.created_at.strftime("%Y-%m-%d %H:%M:%S") if row.created_at else None,
+            "buy": buy,
+            "sell": sell,
+            "hold": hold,
+            "error": err,
+            "pool_size": pool_size,
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -353,22 +432,11 @@ def api_returns():
 def api_pool():
     """현재 팩터 종목풀 API"""
     try:
-        import json
-        pool_path = Path("data/current_pool.json")
-        if not pool_path.exists():
+        from src.utils.json_io import load_json_with_fallback
+        data = load_json_with_fallback("data/current_pool.json")
+        if data is None:
             return jsonify({"ok": True, "stocks": [], "date": None, "count": 0})
 
-        raw = pool_path.read_bytes()
-        for enc in ("utf-8", "cp949", "euc-kr"):
-            try:
-                text = raw.decode(enc)
-                break
-            except (UnicodeDecodeError, LookupError):
-                continue
-        else:
-            text = raw.decode("utf-8", errors="ignore")
-
-        data = json.loads(text)
         # 종목명이 비어있으면 pykrx로 보충
         for s in data.get("stocks", []):
             if not s.get("name"):

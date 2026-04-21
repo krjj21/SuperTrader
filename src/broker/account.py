@@ -96,11 +96,19 @@ class AccountManager:
         output2 = data.get("output2", [{}])
         summary_data = output2[0] if output2 else {}
 
+        total_pnl = int(summary_data.get("evlu_pfls_smtl_amt", 0))
+        pnl_pct_api = float(summary_data.get("evlu_pfls_smtl_rt", 0)) if summary_data.get("evlu_pfls_smtl_rt") else 0.0
+        # KIS 모의투자는 evlu_pfls_smtl_rt 가 0.0 으로 반환되는 경우가 있어 수동 계산 fallback
+        if pnl_pct_api == 0.0 and total_pnl != 0:
+            total_invested = sum(p.avg_price * p.quantity for p in positions)
+            if total_invested > 0:
+                pnl_pct_api = total_pnl / total_invested * 100.0
+
         summary = AccountSummary(
             total_eval=int(summary_data.get("tot_evlu_amt", 0)),
             total_deposit=int(summary_data.get("dnca_tot_amt", 0)),
-            total_pnl=int(summary_data.get("evlu_pfls_smtl_amt", 0)),
-            total_pnl_pct=float(summary_data.get("evlu_pfls_smtl_rt", 0)) if summary_data.get("evlu_pfls_smtl_rt") else 0.0,
+            total_pnl=total_pnl,
+            total_pnl_pct=pnl_pct_api,
             positions=positions,
             available_cash=int(summary_data.get("prvs_rcdl_excc_amt", 0)),
             asset_change=int(summary_data.get("asst_icdc_amt", 0)),

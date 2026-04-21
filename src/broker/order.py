@@ -47,6 +47,7 @@ class Order:
     order_no: str = ""                      # KIS 주문번호
     filled_qty: int = 0
     filled_price: int = 0
+    reference_price: int = 0                # 주문 시점 참조가(시장가 주문 표시용)
     created_at: datetime = field(default_factory=datetime.now)
     updated_at: datetime = field(default_factory=datetime.now)
     error_msg: str = ""
@@ -211,6 +212,7 @@ class OrderManager:
         quantity: int,
         price: int = 0,
         order_type: OrderType = OrderType.MARKET,
+        reference_price: int = 0,
     ) -> Order:
         """매수 주문 헬퍼"""
         order = Order(
@@ -219,6 +221,7 @@ class OrderManager:
             quantity=quantity,
             order_type=order_type,
             price=price,
+            reference_price=reference_price or price,
         )
         return self.place_order(order)
 
@@ -228,6 +231,7 @@ class OrderManager:
         quantity: int,
         price: int = 0,
         order_type: OrderType = OrderType.MARKET,
+        reference_price: int = 0,
     ) -> Order:
         """매도 주문 헬퍼"""
         order = Order(
@@ -236,5 +240,6 @@ class OrderManager:
             quantity=quantity,
             order_type=order_type,
             price=price,
+            reference_price=reference_price or price,
         )
         return self.place_order(order)

@@ -116,6 +116,12 @@ class RLParams(BaseModel):
     hidden_dim: int = 256
     buy_action_threshold: float = 0.13
     sell_action_threshold: float = 0.06
+    # SAPPO: sentiment 가중치 (0 = baseline PPO, 논문 권장 0.1)
+    sentiment_lambda: float = 0.0
+    # SAPPO: sentiment 소스 — off/news/mock/xgb_proxy
+    sentiment_source: str = "off"
+    # Hybrid: XGB SELL 신뢰도 ≥ threshold 일 때만 RL 보류 무시 매도 허용
+    xgb_sell_confidence_threshold: float = 0.60
 
 
 class TimingConfig(BaseModel):

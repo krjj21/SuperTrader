@@ -9,6 +9,7 @@ from __future__ import annotations
 import pandas as pd
 
 from src.strategy.base import BaseStrategy, TradeSignal, Signal
+from src.strategy._position_utils import business_days_held, resolve_buy_date
 
 
 class FactorRLStrategy(BaseStrategy):
@@ -35,72 +36,9 @@ class FactorRLStrategy(BaseStrategy):
     def update_pool(self, codes: list[str]) -> None:
         self._pool = set(codes)
 
-    @staticmethod
-    def _business_days_held(entry_date: str, reference_date: str | None = None) -> int:
-        """매수일로부터 영업일 기준 보유 일수를 계산합니다.
-
-        Args:
-            entry_date: 매수일 (YYYYMMDD)
-            reference_date: 기준일 (YYYYMMDD 또는 YYYY-MM-DD). 백테스트용. None 이면 현재 시각.
-        """
-        from datetime import datetime, timedelta
-        try:
-            entry = datetime.strptime(entry_date, "%Y%m%d")
-            if reference_date:
-                today = datetime.strptime(reference_date.replace("-", ""), "%Y%m%d")
-            else:
-                today = datetime.now()
-            days = 0
-            current = entry
-            while current < today:
-                current += timedelta(days=1)
-                if current.weekday() < 5:  # 월~금
-                    days += 1
-            return days
-        except Exception:
-            return 0
-
-    @staticmethod
-    def _resolve_buy_date(code: str, avg_price: float) -> str:
-        """매수일을 조회합니다. DB → 일봉 추정 순서로 시도.
-
-        1순위: DB holding_positions 테이블
-        2순위: 일봉에서 매수 평균가와 가장 가까운 종가 날짜 추정
-        3순위: 오늘 날짜 (fallback)
-        """
-        from datetime import datetime, timedelta
-
-        # 1순위: DB 조회
-        try:
-            from src.db.models import get_holding_buy_date
-            db_date = get_holding_buy_date(code)
-            if db_date:
-                return db_date
-        except Exception:
-            pass
-
-        # 2순위: 일봉 기반 추정
-        try:
-            from src.data.market_data import get_ohlcv
-            end = datetime.now().strftime("%Y%m%d")
-            start = (datetime.now() - timedelta(days=45)).strftime("%Y%m%d")
-            df = get_ohlcv(code, start, end)
-            if df is not None and not df.empty and avg_price > 0:
-                df["diff"] = (df["close"] - avg_price).abs()
-                best_idx = df["diff"].idxmin()
-                buy_date = pd.Timestamp(df.loc[best_idx, "date"]).strftime("%Y%m%d")
-                # 추정한 매수일을 DB에 저장 (다음 조회 시 바로 사용)
-                try:
-                    from src.db.models import save_holding
-                    save_holding(code, "", int(avg_price), 0, buy_date)
-                except Exception:
-                    pass
-                return buy_date
-        except Exception:
-            pass
-
-        # 3순위: fallback
-        return datetime.now().strftime("%Y%m%d")
+    # 공통 헬퍼 (_position_utils.py) 의 래퍼 — 기존 호출 코드 호환성 유지
+    _business_days_held = staticmethod(business_days_held)
+    _resolve_buy_date = staticmethod(resolve_buy_date)
 
     def sync_positions(self, held_codes: set[str], prices: dict[str, float] | None = None,
                        avg_prices: dict[str, float] | None = None,

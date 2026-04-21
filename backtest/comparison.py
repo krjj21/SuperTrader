@@ -5,6 +5,9 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
+from pathlib import Path
+
 import pandas as pd
 from loguru import logger
 
@@ -13,6 +16,11 @@ from src.strategy.factor_only import FactorOnlyStrategy
 from src.strategy.factor_macd import FactorMACDStrategy
 from src.strategy.factor_kdj import FactorKDJStrategy
 from backtest.portfolio_engine import PortfolioBacktestEngine
+from backtest.llm_filter_report import (
+    generate_report as generate_llm_filter_report,
+    comparison_columns as llm_filter_comparison_cols,
+    save_report as save_llm_filter_report,
+)
 
 
 def run_strategy_comparison(
@@ -88,16 +96,23 @@ def run_strategy_comparison(
 
     results = {}
     equity_curves = {}
+    filter_cols: dict[str, dict] = {}
+    filter_markdowns: list[str] = []
+    run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    reports_dir = Path("reports")
 
     for name, strategy in strategies.items():
         logger.info(f"전략 실행: {name}")
 
+        run_id = f"bt_{name}_{run_ts}" if validator is not None else ""
         engine = PortfolioBacktestEngine(
             initial_capital=config.backtest.initial_capital,
             commission_rate=config.backtest.commission_rate,
             tax_rate=config.backtest.tax_rate,
             max_positions=config.risk.max_total_positions,
             llm_validator=validator,
+            run_id=run_id,
+            persist_signals=validator is not None,
         )
 
         result = engine.run(strategy, ohlcv_dict, pool_history, rebalance_dates)
@@ -105,6 +120,20 @@ def run_strategy_comparison(
         if "error" not in result:
             results[name] = result["metrics"]
             equity_curves[name] = result["equity_curve"]
+
+            # LLM 필터 활성 + 결정 존재 시 차단 효과 리포트 생성
+            decisions = result.get("llm_decisions") or []
+            if validator is not None and decisions:
+                summary, md = generate_llm_filter_report(
+                    decisions, ohlcv_dict,
+                    strategy=name, filter_mode=str(llm_filter),
+                )
+                filter_cols[name] = llm_filter_comparison_cols(summary, primary_horizon=5)
+                # 각 전략 개별 리포트 저장
+                md_path = reports_dir / f"llm_filter_{name}_{run_ts}.md"
+                save_llm_filter_report(md, md_path)
+                logger.info(f"[{name}] LLM 필터 리포트 저장: {md_path}")
+                filter_markdowns.append(md)
         else:
             logger.warning(f"전략 실패: {name} - {result['error']}")
 
@@ -122,6 +151,18 @@ def run_strategy_comparison(
     ]
     available = [m for m in key_metrics if m in comparison.columns]
     comparison = comparison[available]
+
+    # LLM 필터 활성 시 차단/알파 열 추가
+    if filter_cols:
+        filter_df = pd.DataFrame(filter_cols).T
+        filter_df.index.name = "strategy"
+        comparison = comparison.join(filter_df, how="left")
+
+        # 통합 Markdown 리포트 저장
+        if filter_markdowns:
+            combined_path = reports_dir / f"llm_filter_ALL_{run_ts}.md"
+            save_llm_filter_report("\n\n---\n\n".join(filter_markdowns), combined_path)
+            logger.info(f"LLM 필터 통합 리포트 저장: {combined_path}")
 
     logger.info(f"\n전략 비교 결과:\n{comparison.to_string()}")
     return comparison

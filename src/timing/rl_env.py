@@ -32,6 +32,7 @@ class TradingEnv:
         holding_cost_ramp: float = 0.00005,  # 보유일 증가에 따른 추가 비용
         opportunity_weight: float = 0.35,    # 미보유 시 기회비용 가중치 (v2: 0.5 → 과매매)
         invalid_penalty: float = 0.002,
+        sentiment_lambda: float = 0.0,       # SAPPO: reward += lambda * sentiment(date)
     ):
         self.commission_rate = commission_rate
         self.tax_rate = tax_rate
@@ -46,11 +47,14 @@ class TradingEnv:
         self.holding_cost_ramp = holding_cost_ramp
         self.opportunity_weight = opportunity_weight
         self.invalid_penalty = invalid_penalty
+        self.sentiment_lambda = sentiment_lambda
 
         # 에피소드 상태
         self._features: np.ndarray | None = None
         self._prices: np.ndarray | None = None
         self._log_prices: np.ndarray | None = None
+        self._dates: np.ndarray | None = None      # YYYYMMDD 문자열 배열
+        self._sentiment_series: dict[str, float] | None = None
         self._step: int = 0
         self._max_steps: int = 0
 
@@ -81,8 +85,17 @@ class TradingEnv:
     def n_actions(self) -> int:
         return 3
 
-    def reset(self, df: pd.DataFrame) -> np.ndarray:
-        """에피소드 초기화."""
+    def reset(
+        self,
+        df: pd.DataFrame,
+        sentiment_series: dict[str, float] | pd.Series | None = None,
+    ) -> np.ndarray:
+        """에피소드 초기화.
+
+        Args:
+            df: OHLCV DataFrame (date 컬럼 필요)
+            sentiment_series: {YYYYMMDD: score} dict 또는 pd.Series. 없는 날은 0 으로 처리.
+        """
         features = build_features(df)
         valid_mask = features.notna().all(axis=1)
         valid_idx = valid_mask[valid_mask].index
@@ -93,6 +106,31 @@ class TradingEnv:
         self._features = features.loc[valid_idx].values.astype(np.float32)
         self._prices = df.loc[valid_idx, "close"].values.astype(np.float64)
         self._log_prices = np.log(self._prices)
+
+        # sentiment 용 날짜 배열 저장 (YYYYMMDD)
+        if "date" in df.columns:
+            dates_raw = df.loc[valid_idx, "date"]
+            if pd.api.types.is_datetime64_any_dtype(dates_raw):
+                self._dates = dates_raw.dt.strftime("%Y%m%d").values
+            else:
+                self._dates = dates_raw.astype(str).str.replace("-", "").values
+        else:
+            self._dates = None
+
+        # sentiment_series 를 dict 로 정규화
+        if sentiment_series is None or self.sentiment_lambda == 0.0:
+            self._sentiment_series = None
+        elif isinstance(sentiment_series, pd.Series):
+            self._sentiment_series = {
+                str(k).replace("-", ""): float(v) for k, v in sentiment_series.items()
+            }
+        elif isinstance(sentiment_series, dict):
+            self._sentiment_series = {
+                str(k).replace("-", ""): float(v) for k, v in sentiment_series.items()
+            }
+        else:
+            self._sentiment_series = None
+
         self._step = 0
         self._max_steps = len(self._features) - 1
 
@@ -208,6 +246,17 @@ class TradingEnv:
         # ── 5. 최종 보상 조합 ──
         reward = dsr_reward - dd_penalty
 
+        # ── 5-1. SAPPO: sentiment-weighted reward term ──
+        sentiment_term = 0.0
+        if self.sentiment_lambda > 0.0 and self._sentiment_series is not None and self._dates is not None:
+            try:
+                date_key = str(self._dates[self._step])
+                sentiment_value = self._sentiment_series.get(date_key, 0.0)
+                sentiment_term = self.sentiment_lambda * sentiment_value
+                reward += sentiment_term
+            except (IndexError, KeyError, ValueError):
+                pass
+
         # ── 6. 에피소드 종료 처리 ──
         self._step += 1
         done = self._step >= self._max_steps
@@ -225,6 +274,7 @@ class TradingEnv:
             "base_return": base_return,
             "dsr_reward": dsr_reward,
             "dd_penalty": dd_penalty,
+            "sentiment_term": sentiment_term,
             "n_trades": self._n_trades,
             "total_cost": self._total_cost,
         }

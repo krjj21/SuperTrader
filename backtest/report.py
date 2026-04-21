@@ -49,6 +49,24 @@ def plot_equity_comparison(
 
 def print_comparison_table(comparison: pd.DataFrame) -> str:
     """성과 비교 테이블을 포맷팅합니다."""
+    def _pct_or_dash(x):
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            return "-"
+        if v != v:  # NaN
+            return "-"
+        return f"{v:+.2f}%"
+
+    def _int_or_dash(x):
+        try:
+            v = float(x)
+        except (TypeError, ValueError):
+            return "-"
+        if v != v:
+            return "-"
+        return f"{int(v)}"
+
     formatters = {
         "total_return": "{:.1f}%".format,
         "cagr": "{:.1f}%".format,
@@ -60,6 +78,10 @@ def print_comparison_table(comparison: pd.DataFrame) -> str:
         "profit_factor": "{:.2f}".format,
         "total_trades": "{:.0f}".format,
         "avg_holding_days": "{:.1f}".format,
+        "buy_blocks": _int_or_dash,
+        "sell_blocks": _int_or_dash,
+        "buy_filter_alpha_5d": _pct_or_dash,
+        "sell_filter_alpha_5d": _pct_or_dash,
     }
 
     lines = ["\n" + "=" * 80]

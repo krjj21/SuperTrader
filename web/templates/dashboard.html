@@ -148,6 +148,54 @@
             color: #f85149;
         }
 
+        /* Algorithm Banner */
+        .algo-banner {
+            background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+            border: 1px solid #30363d;
+            border-left: 4px solid #2ea043;
+            border-radius: 10px;
+            padding: 16px 20px;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 12px;
+        }
+        .algo-banner.sappo { border-left-color: #58a6ff; }
+        .algo-banner.kill { border-left-color: #f85149; }
+        .algo-left { display: flex; align-items: center; gap: 14px; }
+        .algo-icon { font-size: 28px; line-height: 1; }
+        .algo-name {
+            font-size: 20px;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 0.3px;
+        }
+        .algo-desc {
+            font-size: 12px;
+            color: #8b949e;
+            margin-top: 2px;
+        }
+        .algo-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+        .algo-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 999px;
+            padding: 4px 10px;
+            font-size: 11px;
+            color: #c9d1d9;
+        }
+        .algo-chip .k { color: #8b949e; }
+        .algo-chip .v { color: #58a6ff; font-weight: 600; }
+        .algo-chip.on { border-color: #2ea043; }
+        .algo-chip.on .v { color: #3fb950; }
+        .algo-chip.off { border-color: #30363d; opacity: 0.7; }
+        .algo-chip.off .v { color: #8b949e; }
+
         /* Pipeline Table */
         .pipeline-wrap { padding: 0; }
         .pipe-table { width: 100%; border-collapse: collapse; }
@@ -196,6 +244,79 @@
         .dot-green { color: #3fb950; }
         .dot-red { color: #f85149; }
         .dot-yellow { color: #d29922; }
+
+        /* Scan Summary Box */
+        .scan-box {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 20px;
+            align-items: center;
+            background: #161b22;
+            border: 1px solid #30363d;
+            border-radius: 10px;
+            padding: 14px 18px;
+            margin-bottom: 20px;
+        }
+        .scan-box-left {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .scan-box-label {
+            font-size: 11px;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .scan-box-time {
+            font-size: 11px;
+            color: #6e7681;
+        }
+        .scan-box-right {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+        .scan-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 8px 14px;
+            min-width: 76px;
+            justify-content: center;
+        }
+        .scan-pill-label { font-size: 11px; color: #8b949e; }
+        .scan-pill-value { font-size: 18px; font-weight: 700; color: #c9d1d9; }
+        .scan-pill.buy  { border-color: #2ea043; }
+        .scan-pill.buy  .scan-pill-value { color: #3fb950; }
+        .scan-pill.sell { border-color: #f85149; }
+        .scan-pill.sell .scan-pill-value { color: #f85149; }
+        .scan-pill.hold { border-color: #484f58; }
+        .scan-pill.hold .scan-pill-value { color: #c9d1d9; }
+        .scan-pill.err  { border-color: #d29922; }
+        .scan-pill.err  .scan-pill-value { color: #d29922; }
+
+        /* Foldable section */
+        .fold-header {
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .fold-header:hover { background: #1c2128; }
+        .fold-icon {
+            font-size: 14px;
+            color: #8b949e;
+            transition: transform 0.2s ease;
+            display: inline-block;
+        }
+        .fold-icon.collapsed { transform: rotate(-90deg); }
+        .fold-body { max-height: 2000px; overflow: hidden; transition: max-height 0.3s ease; }
+        .fold-body.collapsed { max-height: 0; }
 
         /* Factor Pool */
         #factor-pool {
@@ -334,6 +455,27 @@
         </div>
     </div>
 
+    <!-- Current Algorithm Banner -->
+    <div id="algo-banner" class="algo-banner">
+        <div class="algo-left">
+            <div class="algo-icon">⚙️</div>
+            <div>
+                <div class="algo-name" id="algo-name">Loading...</div>
+                <div class="algo-desc" id="algo-desc"></div>
+            </div>
+        </div>
+        <div class="algo-chips" id="algo-chips"></div>
+    </div>
+
+    <!-- Last Scan Summary (BUY/SELL/HOLD counts) -->
+    <div id="scan-box" class="scan-box">
+        <div class="scan-box-left">
+            <div class="scan-box-label">Last Scan</div>
+            <div class="scan-box-time" id="scan-time">Loading...</div>
+        </div>
+        <div class="scan-box-right" id="scan-pills"></div>
+    </div>
+
     <div class="cards" id="cards">
         <div class="loading">Loading...</div>
     </div>
@@ -357,9 +499,14 @@
 
     <!-- Factor Pool -->
     <div class="table-wrap" style="margin-bottom:24px;">
-        <div class="table-header">Factor Pool</div>
-        <div id="factor-pool">
-            <div class="loading">Loading...</div>
+        <div class="table-header fold-header" onclick="toggleFold('factor-pool-body', 'fold-icon-pool')">
+            <span>Factor Pool</span>
+            <span class="fold-icon" id="fold-icon-pool">▾</span>
+        </div>
+        <div id="factor-pool-body" class="fold-body">
+            <div id="factor-pool">
+                <div class="loading">Loading...</div>
+            </div>
         </div>
     </div>
 
@@ -424,6 +571,11 @@
                     <div class="card-label">Unrealized P&L</div>
                     <div class="card-value ${pctClass(s.unrealized_pnl)}">${pnlSign(s.unrealized_pnl)}</div>
                     <div class="card-sub neutral">${s.num_positions} positions</div>
+                </div>
+                <div class="card">
+                    <div class="card-label">Invested</div>
+                    <div class="card-value">${fmt(s.total_invested)}</div>
+                    <div class="card-sub neutral">매입원가 · ${s.num_positions} holdings</div>
                 </div>
                 <div class="card">
                     <div class="card-label">Available</div>
@@ -530,12 +682,103 @@
             </div>`;
         }
 
+        function renderAlgoBanner(p) {
+            const banner = document.getElementById('algo-banner');
+            const icon = { factor_only: '📊', factor_rl: '🤖', factor_hybrid: '🏆',
+                           factor_macd: '📈', factor_kdj: '📉',
+                           factor_xgboost: '🌲', factor_decision_tree: '🌳',
+                           factor_lightgbm: '⚡', factor_lstm: '🧠', factor_transformer: '✨' }[p.strategy] || '⚙️';
+            document.getElementById('algo-name').textContent = p.strategy;
+            document.getElementById('algo-desc').textContent = p.strategy_description || '';
+            document.querySelector('.algo-icon').textContent = icon;
+
+            // Banner color state
+            banner.classList.remove('sappo', 'kill');
+            if (p.kill_switch) banner.classList.add('kill');
+            else if ((p.sentiment_lambda || 0) > 0) banner.classList.add('sappo');
+
+            const chips = [];
+            // Factor module
+            chips.push(`<span class="algo-chip"><span class="k">factors</span><span class="v">${p.factor_module}</span></span>`);
+            // Pool size
+            chips.push(`<span class="algo-chip"><span class="k">pool</span><span class="v">${p.pool_size}</span></span>`);
+            // RL thresholds (only for strategies using RL)
+            if (p.strategy === 'factor_rl' || p.strategy === 'factor_hybrid') {
+                chips.push(`<span class="algo-chip"><span class="k">buy_th</span><span class="v">${p.buy_action_threshold}</span></span>`);
+                chips.push(`<span class="algo-chip"><span class="k">sell_th</span><span class="v">${p.sell_action_threshold}</span></span>`);
+            }
+            // LLM
+            if (p.llm_enabled) {
+                chips.push(`<span class="algo-chip on"><span class="k">LLM</span><span class="v">ON</span></span>`);
+            } else {
+                chips.push(`<span class="algo-chip off"><span class="k">LLM</span><span class="v">OFF</span></span>`);
+            }
+            // SAPPO
+            const lam = p.sentiment_lambda || 0;
+            const src = p.sentiment_source || 'off';
+            if (lam > 0 && src !== 'off') {
+                chips.push(`<span class="algo-chip on"><span class="k">SAPPO λ</span><span class="v">${lam} (${src})</span></span>`);
+            } else {
+                chips.push(`<span class="algo-chip off"><span class="k">SAPPO</span><span class="v">OFF</span></span>`);
+            }
+            // Kill switch
+            if (p.kill_switch) {
+                chips.push(`<span class="algo-chip" style="border-color:#f85149;"><span class="k">KILL</span><span class="v" style="color:#f85149;">ACTIVE</span></span>`);
+            }
+            document.getElementById('algo-chips').innerHTML = chips.join('');
+        }
+
         async function refreshPipeline() {
             try {
                 const res = await fetch('/api/pipeline');
                 const data = await res.json();
                 if (data.ok) {
-                    document.getElementById('pipeline').innerHTML = renderPipeline(data);
+                    const pipeEl = document.getElementById('pipeline');
+                    if (pipeEl) pipeEl.innerHTML = renderPipeline(data);
+                    renderAlgoBanner(data);
+                }
+            } catch (e) { console.warn('pipeline refresh failed', e); }
+        }
+
+        // ── Scan Summary Box ──
+        async function refreshScanSummary() {
+            try {
+                const res = await fetch('/api/scan_summary');
+                const d = await res.json();
+                if (!d.ok) return;
+                document.getElementById('scan-time').textContent =
+                    d.time ? `${d.time}  ·  pool ${d.pool_size}` : 'No scan yet';
+                const pills = [
+                    { cls: 'buy',  label: 'BUY',  value: d.buy },
+                    { cls: 'sell', label: 'SELL', value: d.sell },
+                    { cls: 'hold', label: 'HOLD', value: d.hold },
+                ];
+                if (d.error > 0) pills.push({ cls: 'err', label: 'ERR', value: d.error });
+                document.getElementById('scan-pills').innerHTML = pills.map(p => `
+                    <div class="scan-pill ${p.cls}">
+                        <span class="scan-pill-label">${p.label}</span>
+                        <span class="scan-pill-value">${p.value}</span>
+                    </div>
+                `).join('');
+            } catch (e) { console.warn('scan summary refresh failed', e); }
+        }
+
+        // ── Foldable sections ──
+        const FOLD_KEY_PREFIX = 'supertrader_fold_';
+        function toggleFold(bodyId, iconId) {
+            const body = document.getElementById(bodyId);
+            const icon = document.getElementById(iconId);
+            if (!body) return;
+            const collapsed = body.classList.toggle('collapsed');
+            if (icon) icon.classList.toggle('collapsed', collapsed);
+            try { localStorage.setItem(FOLD_KEY_PREFIX + bodyId, collapsed ? '1' : '0'); } catch (e) {}
+        }
+        function applyFoldState(bodyId, iconId) {
+            try {
+                const v = localStorage.getItem(FOLD_KEY_PREFIX + bodyId);
+                if (v === '1') {
+                    document.getElementById(bodyId)?.classList.add('collapsed');
+                    document.getElementById(iconId)?.classList.add('collapsed');
                 }
             } catch (e) {}
         }
@@ -796,11 +1039,16 @@
             } catch (e) {}
         }
 
+        applyFoldState('factor-pool-body', 'fold-icon-pool');
         refresh();
+        refreshPipeline();
+        refreshScanSummary();
         refreshPool();
         refreshSignals();
         refreshReturns();
         setInterval(refresh, 30000);
+        setInterval(refreshPipeline, 30000);
+        setInterval(refreshScanSummary, 30000);
         setInterval(refreshPool, 60000);      // 1분마다 갱신
         setInterval(refreshSignals, 30000);
         setInterval(refreshReturns, 300000);  // 5분마다 갱신

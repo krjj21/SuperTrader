@@ -55,6 +55,31 @@ class TimingPredictor:
             )
         return self.predict(df)
 
+    def predict_proba_last(self, df: pd.DataFrame, label: int = -1) -> float | None:
+        """최근 bar 의 특정 라벨 예측 확률을 반환합니다.
+
+        Args:
+            df: OHLCV DataFrame (최소 60일 이상)
+            label: 확률을 조회할 클래스 (-1=SELL, 0=HOLD, 1=BUY)
+
+        Returns:
+            0.0~1.0 확률값. 모델이 predict_proba 미지원이면 None.
+        """
+        if not hasattr(self.model, "predict_proba"):
+            return None
+        try:
+            features = build_features(df)
+            proba = self.model.predict_proba(features)
+            if label not in proba.columns:
+                return None
+            val = float(proba[label].iloc[-1])
+            if val != val:  # NaN 방어
+                return None
+            return val
+        except Exception as e:
+            logger.debug(f"predict_proba_last 실패: {e}")
+            return None
+
     def predict_batch(self, ohlcv_dict: dict[str, pd.DataFrame]) -> dict[str, int]:
         """여러 종목의 타이밍 시그널을 배치 예측합니다.
 

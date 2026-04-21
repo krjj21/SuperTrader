@@ -81,18 +81,40 @@ class SlackNotifier:
         return self._send(text, channel=self.trade_channel)
 
     def notify_order_filled(self, order: Order) -> bool:
-        """체결 완료 알림"""
-        emoji = "✅" if order.side == OrderSide.BUY else "💰"
+        """체결 완료 알림 (filled_qty>0 일 때만 체결, 아니면 제출 알림)"""
         action = "매수" if order.side == OrderSide.BUY else "매도"
 
-        text = (
-            f"{emoji} *{action} 체결*\n"
-            f"• 종목: {order.stock_code}\n"
-            f"• 수량: {order.filled_qty:,}주\n"
-            f"• 체결가: {order.filled_price:,}원\n"
-            f"• 금액: {order.filled_qty * order.filled_price:,}원\n"
-            f"• 주문번호: {order.order_no}"
-        )
+        if order.filled_qty > 0:
+            emoji = "✅" if order.side == OrderSide.BUY else "💰"
+            text = (
+                f"{emoji} *{action} 체결*\n"
+                f"• 종목: {order.stock_code}\n"
+                f"• 수량: {order.filled_qty:,}주\n"
+                f"• 체결가: {order.filled_price:,}원\n"
+                f"• 금액: {order.filled_qty * order.filled_price:,}원\n"
+                f"• 주문번호: {order.order_no}"
+            )
+        else:
+            # 주문 제출만 된 상태 (시장가 주문은 체결 확인 전)
+            if order.price > 0:
+                price_str = f"{order.price:,}원 (지정가)"
+            elif order.reference_price > 0:
+                price_str = f"약 {order.reference_price:,}원 (시장가)"
+            else:
+                price_str = "시장가"
+            estimate = (
+                order.reference_price * order.quantity
+                if order.reference_price > 0 else 0
+            )
+            amount_str = f"{estimate:,}원 (추정)" if estimate else "-"
+            text = (
+                f"📤 *{action} 주문 제출*\n"
+                f"• 종목: {order.stock_code}\n"
+                f"• 수량: {order.quantity:,}주\n"
+                f"• 가격: {price_str}\n"
+                f"• 예상 금액: {amount_str}\n"
+                f"• 주문번호: {order.order_no}"
+            )
         return self._send(text, channel=self.trade_channel)
 
     def notify_order_failed(self, order: Order) -> bool:

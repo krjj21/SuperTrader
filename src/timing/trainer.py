@@ -95,10 +95,57 @@ def train_timing_model(
     """
     config = get_config().timing
 
-    # RL 모델은 별도 학습 파이프라인 사용
+    # RL 모델은 별도 학습 파이프라인 사용 (+ SAPPO 옵션)
     if model_type == "rl":
         from src.timing.rl_trainer import train_rl_model
-        return train_rl_model(ohlcv_dict, save_path=save_path or "models/rl_timing.pt")
+        rl_cfg = get_config().timing.rl
+        sentiment_lambda = float(getattr(rl_cfg, "sentiment_lambda", 0.0))
+        sentiment_source = str(getattr(rl_cfg, "sentiment_source", "off"))
+        sentiment_map: dict[str, dict[str, float]] | None = None
+        if sentiment_lambda > 0.0 and sentiment_source != "off":
+            sentiment_map = _load_sentiment_map(ohlcv_dict.keys(), sentiment_source)
+            if not sentiment_map:
+                logger.warning(
+                    f"sentiment_source={sentiment_source} 요청이지만 sentiment 데이터 없음 — "
+                    f"baseline PPO (λ=0) 로 폴백"
+                )
+                sentiment_lambda = 0.0
+                sentiment_source = "off"
+        return train_rl_model(
+            ohlcv_dict,
+            save_path=save_path or "models/rl_timing.pt",
+            sentiment_lambda=sentiment_lambda,
+            sentiment_map=sentiment_map,
+            sentiment_source=sentiment_source,
+        )
+
+
+def _load_sentiment_map(codes, source: str) -> dict[str, dict[str, float]]:
+    """sentiment DB 에서 {code: {date: score}} 로드."""
+    try:
+        from src.db.sappo_models import init_sappo_db, get_sappo_session, SentimentScore
+        init_sappo_db("data/trading.db")
+    except Exception as e:
+        logger.warning(f"SAPPO DB 초기화 실패: {e}")
+        return {}
+
+    session = get_sappo_session()
+    try:
+        rows = (
+            session.query(SentimentScore)
+            .filter(SentimentScore.stock_code.in_(list(codes)))
+            .all()
+        )
+    finally:
+        session.close()
+
+    if not rows:
+        return {}
+    m: dict[str, dict[str, float]] = {}
+    for r in rows:
+        m.setdefault(r.stock_code, {})[r.date] = float(r.score)
+    logger.info(f"sentiment_map 로드: {len(m)} 종목, 총 {sum(len(v) for v in m.values())} 점수")
+    return m
 
     # 전 종목 피처 + 라벨 통합
     all_features = []

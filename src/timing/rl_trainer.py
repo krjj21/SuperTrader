@@ -22,12 +22,27 @@ from src.timing.rl_agent import RLTimingModel
 
 
 def _collect_single_episode_worker(args: tuple) -> dict | None:
-    """단일 종목 에피소드 수집 (워커 스레드용 — CPU에서 실행)."""
-    code, df, cpu_agent, env, deterministic = args
+    """단일 종목 에피소드 수집 (워커 스레드용 — CPU에서 실행).
+
+    args = (code, df, cpu_agent, env, deterministic, sentiment_series)
+    sentiment_series: None 이면 SAPPO 비활성.
+    """
+    if len(args) == 6:
+        code, df, cpu_agent, env, deterministic, sentiment_series = args
+    else:
+        code, df, cpu_agent, env, deterministic = args
+        sentiment_series = None
     if len(df) < 60:
         return None
     try:
-        result = cpu_agent.collect_episode(env, df, deterministic=deterministic)
+        # env.reset 에 sentiment_series 를 주입하기 위한 hook
+        # collect_episode 가 env.reset(df) 만 호출하면 sentiment 주입 불가 →
+        # 여기서 env.reset 을 직접 호출한 뒤 collect_episode 는 이미 초기화된 env 로 돌림
+        if sentiment_series is not None:
+            env.reset(df, sentiment_series=sentiment_series)
+            result = cpu_agent.collect_episode(env, df, deterministic=deterministic, reset_env=False)
+        else:
+            result = cpu_agent.collect_episode(env, df, deterministic=deterministic)
         result["code"] = code
         return result
     except Exception:
@@ -41,15 +56,17 @@ def _collect_rollouts_parallel(
     commission_rate: float,
     tax_rate: float,
     n_workers: int = 8,
+    sentiment_lambda: float = 0.0,
+    sentiment_map: dict[str, dict[str, float]] | None = None,
 ) -> tuple[list, list]:
     """멀티스레딩으로 rollout을 병렬 수집합니다.
 
-    RL 환경은 CPU 연산이므로 ThreadPool로 GIL 우회 가능
-    (numpy/torch no_grad는 GIL 해제).
+    Args:
+        sentiment_lambda: SAPPO 가중치 (0 이면 baseline PPO)
+        sentiment_map: {code: {YYYYMMDD: score}} — 종목별 sentiment 시계열
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    # CPU 복사본으로 추론 (GPU 전송 오버헤드 제거)
     cpu_state_dict = {k: v.cpu() for k, v in agent.actor.state_dict().items()}
     cpu_agent = RLTimingModel(
         state_dim=agent.state_dim,
@@ -63,11 +80,15 @@ def _collect_rollouts_parallel(
     rollouts = []
     rewards = []
 
-    # 스레드풀에서 종목별 rollout 병렬 수집
+    sentiment_map = sentiment_map or {}
     args_list = [
         (code, train_dict[code], cpu_agent,
-         TradingEnv(commission_rate=commission_rate, tax_rate=tax_rate),
-         False)
+         TradingEnv(
+             commission_rate=commission_rate, tax_rate=tax_rate,
+             sentiment_lambda=sentiment_lambda,
+         ),
+         False,
+         sentiment_map.get(code) if sentiment_lambda > 0 else None)
         for code in codes if len(train_dict.get(code, [])) >= 60
     ]
 
@@ -143,8 +164,19 @@ def train_rl_model(
     ohlcv_dict: dict[str, pd.DataFrame],
     save_path: str = "models/rl_timing.pt",
     val_ratio: float = 0.2,
+    sentiment_lambda: float = 0.0,
+    sentiment_map: dict[str, dict[str, float]] | None = None,
+    run_name: str | None = None,
+    sentiment_source: str = "off",
 ) -> dict:
-    """PPO로 RL 타이밍 모델을 학습합니다."""
+    """PPO/SAPPO 로 RL 타이밍 모델을 학습합니다.
+
+    Args:
+        sentiment_lambda: SAPPO 가중치. 0 이면 baseline PPO.
+        sentiment_map: {code: {YYYYMMDD: score}} — sentiment_lambda > 0 일 때 사용.
+        run_name: DB 기록용 식별자.
+        sentiment_source: "off" / "news" / "mock" / "xgb_proxy" 등 라벨링용.
+    """
     config = get_config()
     rl_config = config.timing.rl
 
@@ -224,6 +256,8 @@ def train_rl_model(
             commission_rate=config.backtest.commission_rate,
             tax_rate=config.backtest.tax_rate,
             n_workers=n_workers,
+            sentiment_lambda=sentiment_lambda,
+            sentiment_map=sentiment_map,
         )
 
         if not episode_rewards:
@@ -324,8 +358,53 @@ def train_rl_model(
         f"sharpe={final_metrics['sharpe']:.3f}, "
         f"return={final_metrics['total_return']:.2f}%, "
         f"win_rate={final_metrics['win_rate']:.1f}%, "
-        f"avg_trades={final_metrics['avg_trades']:.1f}"
+        f"avg_trades={final_metrics['avg_trades']:.1f}, "
+        f"sentiment_lambda={sentiment_lambda}"
     )
+
+    # SAPPO 학습 런 DB 기록 (sentiment_lambda 와 무관하게 매 학습 기록 → baseline 비교 가능)
+    try:
+        from src.db.sappo_models import init_sappo_db, save_training_run
+        init_sappo_db("data/trading.db")
+
+        def _date_range(dfs: dict[str, pd.DataFrame]) -> tuple[str, str]:
+            starts, ends = [], []
+            for d in dfs.values():
+                if "date" in d.columns and not d.empty:
+                    if pd.api.types.is_datetime64_any_dtype(d["date"]):
+                        starts.append(d["date"].iloc[0].strftime("%Y%m%d"))
+                        ends.append(d["date"].iloc[-1].strftime("%Y%m%d"))
+                    else:
+                        starts.append(str(d["date"].iloc[0]).replace("-", ""))
+                        ends.append(str(d["date"].iloc[-1]).replace("-", ""))
+            return (min(starts) if starts else "", max(ends) if ends else "")
+
+        train_s, train_e = _date_range(train_dict)
+        val_s, val_e = _date_range(val_dict)
+
+        auto_name = run_name or (
+            f"{'sappo' if sentiment_lambda > 0 else 'baseline'}"
+            f"_lambda{sentiment_lambda}_{time.strftime('%Y%m%d_%H%M%S')}"
+        )
+
+        save_training_run(
+            run_name=auto_name,
+            lambda_value=sentiment_lambda,
+            sentiment_source=sentiment_source,
+            train_start=train_s, train_end=train_e,
+            val_start=val_s, val_end=val_e,
+            n_episodes=final_metrics.get("n_episodes", 0),
+            val_sharpe=float(final_metrics.get("sharpe", 0.0)),
+            val_return=float(final_metrics.get("total_return", 0.0)),
+            val_mdd=float(final_metrics.get("max_drawdown", 0.0)),
+            val_win_rate=float(final_metrics.get("win_rate", 0.0)),
+            val_avg_trades=float(final_metrics.get("avg_trades", 0.0)),
+            model_path=str(save_path),
+            notes=f"train_time={total_train_time/60:.1f}min, best_sharpe={best_sharpe:.3f}",
+        )
+        logger.info(f"학습 런 기록: {auto_name}")
+    except Exception as e:
+        logger.warning(f"학습 런 DB 저장 실패: {e}")
 
     return {
         "accuracy": final_metrics["win_rate"] / 100,
@@ -335,4 +414,5 @@ def train_rl_model(
         "n_episodes": final_metrics["n_episodes"],
         "win_rate": final_metrics["win_rate"],
         "n_samples": sum(len(df) for df in train_dict.values()),
+        "sentiment_lambda": sentiment_lambda,
     }

@@ -90,13 +90,44 @@ def run_backtest(only_strategies: list[str] | None = None, review: bool = False,
     )
 
     if not comparison.empty:
-        print_comparison_table(comparison)
+        table_text = print_comparison_table(comparison)
         logger.info("백테스트 완료!")
+
+        _post_backtest_slack(table_text, comparison, llm_filter=llm_filter)
 
         if review:
             _trigger_codex_backtest_review(comparison)
     else:
         logger.warning("백테스트 결과 없음")
+
+
+def _post_backtest_slack(table_text: str, comparison: pd.DataFrame, llm_filter: str | None = None) -> None:
+    """백테스트 결과 비교표를 Slack으로 전송한다. 실패해도 백테스트 흐름은 계속된다."""
+    try:
+        from src.notification.slack_bot import SlackNotifier
+        notifier = SlackNotifier()
+        if not notifier.token:
+            logger.info("Slack 미설정 — 전송 건너뜀")
+            return
+
+        stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        header = f"🧪 *백테스트 결과* — {stamp}"
+        filter_note = f" (LLM 필터: `{llm_filter}`)" if llm_filter else ""
+        header += filter_note
+
+        # Slack 은 4000자 제한. 큰 표는 잘라낸다.
+        body = table_text.strip()
+        if len(body) > 3500:
+            body = body[:3500] + "\n...(truncated)"
+
+        msg = f"{header}\n```\n{body}\n```"
+        ok = notifier._send(msg)
+        if ok:
+            logger.info("백테스트 결과 Slack 전송 완료")
+        else:
+            logger.warning("백테스트 결과 Slack 전송 실패")
+    except Exception as e:
+        logger.warning(f"Slack 전송 예외: {e}")
 
 
 def _trigger_codex_backtest_review(comparison: pd.DataFrame) -> None:
@@ -351,7 +382,10 @@ def run_live():
     from src.broker.account import AccountManager
     from src.risk.manager import RiskManager
     from src.notification.slack_bot import SlackNotifier
-    from src.db.models import init_db, save_runtime_status, save_signal_log, save_daily_pnl
+    from src.db.models import (
+        init_db, save_runtime_status, save_signal_log, save_daily_pnl,
+        save_trade, save_holding, remove_holding,
+    )
 
     # 초기화
     init_db(config.database.path)
@@ -428,9 +462,51 @@ def run_live():
             sync_runtime_status()
             notifier.notify_error(str(e), "종목풀 리밸런싱")
 
-    # 시작 시 즉시 종목풀 구성
-    logger.info("팩터 기반 종목풀 구성 중...")
-    rebalance_pool()
+    def _restore_pool_from_disk() -> bool:
+        """data/current_pool.json 에서 이전 풀을 복원합니다.
+
+        재시작 시 기존 풀을 유지해 pool-diff 매매 폭증을 방지.
+        리밸런싱은 cron 일정(매월 1일)에만 실행.
+        성공 시 True, 실패 또는 풀 이상(<10종목) 시 False.
+        """
+        from src.factors.stock_pool import StockPool
+        from src.utils.json_io import load_json_with_fallback
+        data = load_json_with_fallback("data/current_pool.json")
+        if data is None:
+            return False
+        try:
+            stocks = data.get("stocks", [])
+            if len(stocks) < 10:
+                logger.warning(f"저장된 풀이 {len(stocks)}종목뿐 — 재빌드")
+                return False
+            codes = [s["code"] for s in stocks]
+            scores = {s["code"]: s.get("score", 0.0) for s in stocks}
+            pool = StockPool(
+                date=data.get("date", ""),
+                codes=codes,
+                scores=scores,
+                entered=[],
+                exited=[],
+            )
+            strategy.update_pool(pool.codes)
+            _current_pool[0] = pool
+            for s in stocks:
+                if s.get("name"):
+                    _stock_names[s["code"]] = s["name"]
+            logger.info(
+                f"이전 종목풀 복원: {len(pool.codes)}종목 (date={pool.date}) "
+                f"— 리밸런싱은 cron 일정에서만 실행"
+            )
+            sync_runtime_status()
+            return True
+        except Exception as e:
+            logger.warning(f"풀 복원 실패: {e} — 재빌드")
+            return False
+
+    # 시작 시: 기존 풀 복원 시도, 실패하면 새로 빌드
+    logger.info("종목풀 복원/구성 중...")
+    if not _restore_pool_from_disk():
+        rebalance_pool()
 
     # LLM 시그널 검증기
     from src.timing.llm_validator import SignalValidator
@@ -469,35 +545,56 @@ def run_live():
                 if pos.stock_name and pos.stock_code not in _stock_names:
                     _stock_names[pos.stock_code] = pos.stock_name
 
+            # 포지션 가격 스냅샷 (balance 시점) — sync_positions 에 재사용
+            _pos_prices = {p.stock_code: float(p.current_price) for p in balance.positions}
+            _pos_avg = {p.stock_code: float(p.avg_price) for p in balance.positions}
+
+            def _sync_strategy_now(held: set[str]) -> None:
+                """보유 종목 변경 직후 전략 내부 상태를 즉시 동기화."""
+                if not hasattr(strategy, "sync_positions"):
+                    return
+                try:
+                    strategy.sync_positions(held, _pos_prices, avg_prices=_pos_avg)
+                except Exception as e:
+                    logger.debug(f"sync_positions 실패: {e}")
+
             # ── 손절 체크 (LLM 검증 없이 즉시 실행) ──
             stop_codes = set(risk_mgr.check_stop_loss(balance.positions))
+            # 손절된 종목은 같은 사이클에서 재매수 방지
+            held_codes = {
+                pos.stock_code for pos in balance.positions
+                if pos.stock_code not in stop_codes
+            }
             for pos in balance.positions:
                 if pos.stock_code not in stop_codes:
                     continue
                 try:
-                    order = order_mgr.sell(pos.stock_code, pos.quantity)
+                    order = order_mgr.sell(pos.stock_code, pos.quantity, reference_price=int(pos.current_price))
                     if order.order_no:
                         notifier.notify_stop_loss(pos)
                         logger.info(
                             f"손절 매도: {pos.stock_name}({pos.stock_code}) "
                             f"{pos.pnl_pct:.2f}% / {pos.pnl:,}원"
                         )
-                        from src.db.models import remove_holding
+                        save_trade(
+                            stock_code=pos.stock_code,
+                            stock_name=pos.stock_name,
+                            side="sell",
+                            quantity=pos.quantity,
+                            price=int(pos.current_price),
+                            order_no=order.order_no,
+                            strategy=config.strategy.name,
+                            signal_reason=f"stop_loss {pos.pnl_pct:.2f}%",
+                        )
                         remove_holding(pos.stock_code)
+                        held_codes.discard(pos.stock_code)
+                        _sync_strategy_now(held_codes)
                 except Exception as e:
                     logger.error(f"손절 매도 실패: {pos.stock_code} - {e}")
 
-            # 손절된 종목은 같은 사이클에서 재매수 방지
-            held_codes = {
-                pos.stock_code for pos in balance.positions
-                if pos.stock_code not in stop_codes
-            }
-
-            # RL 전략 포지션 동기화 (보유 종목 정보 + 매수평균가 전달)
-            if hasattr(strategy, 'sync_positions'):
-                prices = {p.stock_code: float(p.current_price) for p in balance.positions}
-                avg_prices = {p.stock_code: float(p.avg_price) for p in balance.positions}
-                strategy.sync_positions(held_codes, prices, avg_prices=avg_prices)
+            # 손절이 한 건도 없었어도 한 번은 동기화 (재시작/편집 후 초기화용)
+            if not stop_codes:
+                _sync_strategy_now(held_codes)
 
             # 종목풀 내 종목에 대해 시그널 체크
             pool_codes = list(strategy._pool) if hasattr(strategy, '_pool') else []
@@ -510,14 +607,23 @@ def run_live():
                     if pos.stock_code not in exited_codes:
                         continue
                     try:
-                        order = order_mgr.sell(pos.stock_code, pos.quantity)
+                        order = order_mgr.sell(pos.stock_code, pos.quantity, reference_price=int(pos.current_price))
                         if order.order_no:
                             notifier.notify_order_filled(order)
                             logger.info(
                                 f"풀 퇴출 매도: {pos.stock_name}({pos.stock_code}) "
                                 f"{pos.quantity}주"
                             )
-                            from src.db.models import remove_holding
+                            save_trade(
+                                stock_code=pos.stock_code,
+                                stock_name=pos.stock_name,
+                                side="sell",
+                                quantity=pos.quantity,
+                                price=int(pos.current_price),
+                                order_no=order.order_no,
+                                strategy=config.strategy.name,
+                                signal_reason="pool_exit",
+                            )
                             remove_holding(pos.stock_code)
                             save_signal_log(
                                 stock_code=pos.stock_code,
@@ -528,6 +634,7 @@ def run_live():
                                 signal_type="pool_exit",
                             )
                             held_codes.discard(pos.stock_code)
+                            _sync_strategy_now(held_codes)
                     except Exception as e:
                         logger.error(f"풀 퇴출 매도 실패: {pos.stock_code} - {e}")
             signal_summary = {"BUY": 0, "SELL": 0, "HOLD": 0, "error": 0}
@@ -577,11 +684,21 @@ def run_live():
                         if qty > 0:
                             valid, reason = risk_mgr.validate_order(signal, qty, balance)
                             if valid:
-                                order = order_mgr.buy(code, qty)
+                                order = order_mgr.buy(code, qty, reference_price=int(signal.price))
                                 if order.order_no:
                                     notifier.notify_order_filled(order)
+                                    save_trade(
+                                        stock_code=code,
+                                        stock_name=stock_name,
+                                        side="buy",
+                                        quantity=qty,
+                                        price=int(signal.price),
+                                        order_no=order.order_no,
+                                        strategy=config.strategy.name,
+                                        signal_strength=float(signal.strength),
+                                        signal_reason=signal.reason or "",
+                                    )
                                     # DB에 매수일 기록
-                                    from src.db.models import save_holding
                                     save_holding(
                                         stock_code=code,
                                         stock_name=stock_name,
@@ -589,16 +706,40 @@ def run_live():
                                         quantity=qty,
                                         buy_date=datetime.now().strftime("%Y%m%d"),
                                     )
+                                    held_codes.add(code)
+                                    _pos_prices[code] = float(signal.price)
+                                    _pos_avg[code] = float(signal.price)
+                                    _sync_strategy_now(held_codes)
                     else:
                         # 보유 중이면 전량 매도
                         for pos in balance.positions:
                             if pos.stock_code == code:
-                                order = order_mgr.sell(code, pos.quantity)
+                                order = order_mgr.sell(code, pos.quantity, reference_price=int(pos.current_price))
                                 if order.order_no:
                                     notifier.notify_order_filled(order)
+                                    save_trade(
+                                        stock_code=code,
+                                        stock_name=pos.stock_name,
+                                        side="sell",
+                                        quantity=pos.quantity,
+                                        price=int(pos.current_price),
+                                        order_no=order.order_no,
+                                        strategy=config.strategy.name,
+                                        signal_strength=float(signal.strength),
+                                        signal_reason=signal.reason or "",
+                                    )
                                     # DB에서 매도 종목 제거
-                                    from src.db.models import remove_holding
                                     remove_holding(code)
+                                    held_codes.discard(code)
+                                    _sync_strategy_now(held_codes)
+
+            # 주문 체결 확인 → 체결된 주문은 확정 알림 재발송
+            try:
+                filled = order_mgr.check_filled()
+                for f_order in filled:
+                    notifier.notify_order_filled(f_order)
+            except Exception as e:
+                logger.warning(f"체결 확인 실패: {e}")
 
             summary_msg = f"BUY:{signal_summary['BUY']} SELL:{signal_summary['SELL']} HOLD:{signal_summary['HOLD']} 오류:{signal_summary['error']}"
             logger.info(f"시그널 체크 완료: {len(pool_codes)}종목 — {summary_msg}")
@@ -739,7 +880,47 @@ def run_live():
         day_of_week="sat", hour=6, minute=0,
     )
 
-    logger.info(f"스케줄 시작: {config.schedule.check_interval_sec}초 간격, 리밸런싱 매월 {config.schedule.rebalance_day}일, 재학습 매주 토요일")
+    # ── SAPPO 파이프라인: 일일 뉴스/sentiment + 주간 리포트 ──
+    def daily_sappo_fetch():
+        """매일 장 마감 직후 뉴스/sentiment 수집."""
+        import subprocess
+        logger.info("[SAPPO] 일일 뉴스/sentiment 수집 시작")
+        try:
+            subprocess.run(
+                [sys.executable, "scripts/fetch_daily_news.py"],
+                check=False,
+            )
+        except FileNotFoundError:
+            logger.warning("[SAPPO] fetch_daily_news.py 없음 — 건너뜀")
+        except Exception as e:
+            logger.warning(f"[SAPPO] 일일 수집 실패: {e}")
+
+    def weekly_sappo_report():
+        """매주 토요일 SAPPO 검증 리포트 Slack 전송."""
+        import subprocess
+        logger.info("[SAPPO] 주간 검증 리포트 생성")
+        try:
+            subprocess.run(
+                [sys.executable, "scripts/weekly_sappo_report.py", "--slack"],
+                check=False,
+            )
+        except FileNotFoundError:
+            logger.warning("[SAPPO] weekly_sappo_report.py 없음 — 건너뜀")
+        except Exception as e:
+            logger.warning(f"[SAPPO] 주간 리포트 실패: {e}")
+
+    # 일일 SAPPO 수집 — post_market 이후 (16:00)
+    scheduler.add_job(
+        daily_sappo_fetch, "cron",
+        hour=16, minute=0,
+    )
+    # 주간 SAPPO 리포트 — 매주 토요일 오전 (weekly_retrain 직후 07:00)
+    scheduler.add_job(
+        weekly_sappo_report, "cron",
+        day_of_week="sat", hour=7, minute=0,
+    )
+
+    logger.info(f"스케줄 시작: {config.schedule.check_interval_sec}초 간격, 리밸런싱 매월 {config.schedule.rebalance_day}일, 재학습 매주 토요일, SAPPO 수집 매일 16:00, SAPPO 리포트 매주 토요일 07:00")
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

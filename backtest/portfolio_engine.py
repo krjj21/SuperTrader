@@ -51,6 +51,8 @@ class PortfolioBacktestEngine:
         max_positions: int = 30,
         stop_loss_pct: float | None = None,
         llm_validator=None,
+        run_id: str = "",
+        persist_signals: bool = False,
     ):
         self.initial_capital = initial_capital
         self.commission_rate = commission_rate
@@ -64,11 +66,16 @@ class PortfolioBacktestEngine:
         self.stop_loss_pct = stop_loss_pct
         # 선택적 LLM/mock 검증기 — 라이브와 동일한 필터를 백테스트에 적용
         self.llm_validator = llm_validator
+        self.run_id = run_id
+        self.persist_signals = persist_signals and bool(run_id)
 
         self.cash = float(initial_capital)
         self.positions: dict[str, BacktestPosition] = {}
         self.trades: list[BacktestTrade] = []
         self.equity_history: list[dict] = []
+        # LLM/mock 검증 결정 히스토리 (리포트용)
+        # [{date, code, name, signal, confirmed, reason}]
+        self.llm_decisions: list[dict] = []
 
     def _get_portfolio_value(self, prices: dict[str, float]) -> float:
         """포트폴리오 총 가치를 계산합니다."""
@@ -202,18 +209,24 @@ class PortfolioBacktestEngine:
             # ── 1. 전일 시그널의 주문을 당일 시가로 체결 ──
             if pending_orders:
                 stopped_by_pending: set[str] = set()
+                any_executed = False
                 for code, name, side in pending_orders:
                     exec_price = self._get_open_cached(code, date)
                     if exec_price <= 0:
                         continue
                     if side == "buy":
                         if code not in self.positions and len(self.positions) < self.max_positions:
-                            self._buy(code, name, exec_price, date)
+                            if self._buy(code, name, exec_price, date):
+                                any_executed = True
                     elif side == "sell":
                         if code in self.positions:
-                            self._sell(code, exec_price, date)
-                            stopped_by_pending.add(code)
+                            if self._sell(code, exec_price, date):
+                                stopped_by_pending.add(code)
+                                any_executed = True
                 pending_orders = []
+                # 포지션 변경 직후 전략 동기화 (주문 체결/강제 매도 포함)
+                if any_executed:
+                    self._sync_strategy_positions(strategy, date)
 
             # ── 2. 리밸런싱일: 종목풀 업데이트 → T+1 체결 예약 ──
             if date in rebalance_set and date in pool_history:
@@ -274,45 +287,24 @@ class PortfolioBacktestEngine:
                 if signal.signal == Signal.BUY and code not in self.positions:
                     if code in stopped_today:
                         continue
-                    if self.llm_validator is not None:
-                        try:
-                            confirmed, _ = self.llm_validator.validate_signal(
-                                code, signal.stock_name, "BUY", signal.reason, df_until,
-                            )
-                        except Exception:
-                            confirmed = True
-                        if not confirmed:
-                            continue
+                    if not self._validate_and_record(
+                        code, signal.stock_name, "BUY", signal.reason, df_until, date,
+                    ):
+                        continue
                     pending_orders.append((code, signal.stock_name, "buy"))
 
                 elif signal.signal == Signal.SELL and code in self.positions:
                     # SELL 은 검증기에서도 항상 확정되지만 일관성을 위해 호출
-                    if self.llm_validator is not None:
-                        try:
-                            confirmed, _ = self.llm_validator.validate_signal(
-                                code, signal.stock_name, "SELL", signal.reason, df_until,
-                            )
-                        except Exception:
-                            confirmed = True
-                        if not confirmed:
-                            continue
+                    if not self._validate_and_record(
+                        code, signal.stock_name, "SELL", signal.reason, df_until, date,
+                    ):
+                        continue
                     pending_orders.append((code, "", "sell"))
 
             # ── 5. 전략-엔진 포지션 동기화 (RL 전략 등) ──
-            if hasattr(strategy, "sync_positions"):
-                held = set(self.positions.keys())
-                prices = {c: self._get_close_cached(c, date) for c in held}
-                avg_prices = {c: p.avg_price for c, p in self.positions.items()}
-                entry_dates = {c: p.entry_date.replace("-", "") for c, p in self.positions.items()}
-                try:
-                    strategy.sync_positions(
-                        held, prices,
-                        avg_prices=avg_prices,
-                        entry_dates=entry_dates,
-                        current_date=date,
-                    )
-                except TypeError:
-                    strategy.sync_positions(held, prices)
+            # 시그널 생성 중 전략이 옵티미스틱하게 추가한 엔트리 정리 +
+            # step 1 의 체결 결과 재확인
+            self._sync_strategy_positions(strategy, date)
 
             # ── 6. 일일 포트폴리오 가치 기록 (종가 기준) ──
             prices = {
@@ -328,6 +320,77 @@ class PortfolioBacktestEngine:
             })
 
         return self._compile_results()
+
+    def _sync_strategy_positions(self, strategy: BaseStrategy, date: str) -> None:
+        """엔진 보유 포지션으로 전략의 내부 _positions 를 동기화한다.
+
+        주문 체결(step 1) 직후와 일일 신호 처리 종료 시점에 호출돼 전략이 항상
+        최신 포지션을 기준으로 판단하도록 한다.
+        """
+        if not hasattr(strategy, "sync_positions"):
+            return
+        held = set(self.positions.keys())
+        prices = {c: self._get_close_cached(c, date) for c in held}
+        avg_prices = {c: p.avg_price for c, p in self.positions.items()}
+        entry_dates = {c: p.entry_date.replace("-", "") for c, p in self.positions.items()}
+        try:
+            strategy.sync_positions(
+                held, prices,
+                avg_prices=avg_prices,
+                entry_dates=entry_dates,
+                current_date=date,
+            )
+        except TypeError:
+            strategy.sync_positions(held, prices)
+
+    def _validate_and_record(
+        self,
+        code: str,
+        stock_name: str,
+        signal: str,
+        ml_reason: str,
+        df_until: pd.DataFrame,
+        date: str,
+    ) -> bool:
+        """검증기를 호출하고 결정을 히스토리/DB 에 기록한다. confirmed 여부 반환."""
+        if self.llm_validator is None:
+            return True
+        try:
+            confirmed, reason = self.llm_validator.validate_signal(
+                code, stock_name, signal, ml_reason, df_until,
+            )
+        except Exception as e:
+            # 검증 실패 시 시그널을 그대로 통과시키되, 결정은 기록한다.
+            confirmed = True
+            reason = f"검증 오류: {e}"
+
+        decision_text = "확정" if confirmed else "보류"
+        self.llm_decisions.append({
+            "date": date,
+            "code": code,
+            "name": stock_name,
+            "signal": signal,
+            "decision": decision_text,
+            "reason": reason,
+        })
+
+        if self.persist_signals:
+            try:
+                from src.db.models import save_signal_log
+                save_signal_log(
+                    stock_code=code,
+                    stock_name=stock_name,
+                    signal=signal,
+                    decision=decision_text,
+                    reason=reason,
+                    signal_type="llm_backtest",
+                    run_id=self.run_id,
+                    signal_date=date,
+                )
+            except Exception as e:
+                logger.debug(f"signal_logs 저장 실패: {e}")
+
+        return confirmed
 
     def _get_close_cached(self, code: str, date: str) -> float:
         """종가 캐시에서 O(1) 조회"""
@@ -369,4 +432,5 @@ class PortfolioBacktestEngine:
             "equity_curve": equity_curve,
             "daily_returns": daily_returns,
             "trades": self.trades,
+            "llm_decisions": self.llm_decisions,
         }

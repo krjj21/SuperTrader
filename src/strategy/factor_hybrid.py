@@ -15,6 +15,7 @@ import pandas as pd
 from loguru import logger
 
 from src.strategy.base import BaseStrategy, TradeSignal, Signal
+from src.strategy._position_utils import business_days_held, resolve_buy_date
 
 
 class FactorHybridStrategy(BaseStrategy):
@@ -33,6 +34,7 @@ class FactorHybridStrategy(BaseStrategy):
         rl_cfg = get_config().timing.rl
         self._buy_threshold = rl_cfg.buy_action_threshold
         self._sell_threshold = rl_cfg.sell_action_threshold
+        self._xgb_sell_threshold = float(getattr(rl_cfg, "xgb_sell_confidence_threshold", 0.60))
 
         self._pool: set[str] = set()
         # 포지션 추적 (RL 레이어용)
@@ -43,53 +45,8 @@ class FactorHybridStrategy(BaseStrategy):
     def update_pool(self, codes: list[str]) -> None:
         self._pool = set(codes)
 
-    @staticmethod
-    def _business_days_held(entry_date: str, reference_date: str | None = None) -> int:
-        from datetime import datetime, timedelta
-        try:
-            entry = datetime.strptime(entry_date, "%Y%m%d")
-            if reference_date:
-                today = datetime.strptime(reference_date.replace("-", ""), "%Y%m%d")
-            else:
-                today = datetime.now()
-            days = 0
-            current = entry
-            while current < today:
-                current += timedelta(days=1)
-                if current.weekday() < 5:
-                    days += 1
-            return days
-        except Exception:
-            return 0
-
-    @staticmethod
-    def _resolve_buy_date(code: str, avg_price: float) -> str:
-        from datetime import datetime, timedelta
-        try:
-            from src.db.models import get_holding_buy_date
-            db_date = get_holding_buy_date(code)
-            if db_date:
-                return db_date
-        except Exception:
-            pass
-        try:
-            from src.data.market_data import get_ohlcv
-            end = datetime.now().strftime("%Y%m%d")
-            start = (datetime.now() - timedelta(days=45)).strftime("%Y%m%d")
-            df = get_ohlcv(code, start, end)
-            if df is not None and not df.empty and avg_price > 0:
-                df["diff"] = (df["close"] - avg_price).abs()
-                best_idx = df["diff"].idxmin()
-                buy_date = pd.Timestamp(df.loc[best_idx, "date"]).strftime("%Y%m%d")
-                try:
-                    from src.db.models import save_holding
-                    save_holding(code, "", int(avg_price), 0, buy_date)
-                except Exception:
-                    pass
-                return buy_date
-        except Exception:
-            pass
-        return datetime.now().strftime("%Y%m%d")
+    _business_days_held = staticmethod(business_days_held)
+    _resolve_buy_date = staticmethod(resolve_buy_date)
 
     def sync_positions(self, held_codes: set[str], prices: dict[str, float] | None = None,
                        avg_prices: dict[str, float] | None = None,
@@ -158,15 +115,40 @@ class FactorHybridStrategy(BaseStrategy):
 
         # ── Hybrid 결합 로직 ──
 
-        # SELL: XGBoost SELL → 무조건 실행 (리스크 관리 우선)
+        # SELL: XGBoost SELL 시 신뢰도 + RL 합의로 3-way 분기
         if ml_signal == -1 and holding:
-            # RL도 SELL이면 강한 SELL, 아니어도 실행
-            strength = 0.9 if rl_signal == -1 else 0.65
-            reason = "Hybrid SELL (XGB+RL 동의)" if rl_signal == -1 else "Hybrid SELL (XGB, RL 보류 무시)"
+            xgb_sell_prob = self.ml_predictor.predict_proba_last(df, label=-1)
+            # predict_proba 미지원 또는 실패 시 기존 동작(강제 실행) 유지
+            high_conf = xgb_sell_prob is None or xgb_sell_prob >= self._xgb_sell_threshold
+            conf_str = f"{xgb_sell_prob:.2f}" if xgb_sell_prob is not None else "n/a"
+
+            if rl_signal == -1:
+                # 1) RL 동의 — 항상 실행 (신뢰도 무관)
+                return TradeSignal(
+                    signal=Signal.SELL, stock_code=stock_code, stock_name=stock_name,
+                    price=price, strength=0.90,
+                    reason=(
+                        f"Hybrid SELL (XGB+RL 동의, conf={conf_str}) "
+                        f"보유 {holding_days}일, PnL {unrealized_pnl:+.1%}"
+                    ),
+                )
+            if high_conf:
+                # 2) RL 보류이지만 XGB 고신뢰 → 실행
+                return TradeSignal(
+                    signal=Signal.SELL, stock_code=stock_code, stock_name=stock_name,
+                    price=price, strength=0.70,
+                    reason=(
+                        f"Hybrid SELL (XGB 고신뢰 conf={conf_str} ≥ {self._xgb_sell_threshold:.2f}, "
+                        f"RL 보류 무시) 보유 {holding_days}일, PnL {unrealized_pnl:+.1%}"
+                    ),
+                )
+            # 3) RL 보류 AND XGB 저신뢰 → HOLD (신규 보호)
             return TradeSignal(
-                signal=Signal.SELL, stock_code=stock_code, stock_name=stock_name,
-                price=price, strength=strength,
-                reason=f"{reason} (보유 {holding_days}일, PnL {unrealized_pnl:+.1%})",
+                signal=Signal.HOLD, stock_code=stock_code, price=price,
+                reason=(
+                    f"Hybrid HOLD (XGB 저신뢰 conf={conf_str} < {self._xgb_sell_threshold:.2f} "
+                    f"AND RL 반대) 보유 {holding_days}일, PnL {unrealized_pnl:+.1%}"
+                ),
             )
 
         # BUY: XGBoost BUY + RL BUY → 실행 (두 모델 동의)

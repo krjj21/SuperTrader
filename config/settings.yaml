@@ -92,10 +92,15 @@ timing:
     hidden_dim: 256
     buy_action_threshold: 0.07
     sell_action_threshold: 0.06
+    # SAPPO: reward += lambda × sentiment(code, date). 0 = 기본 PPO
+    sentiment_lambda: 0.0
+    sentiment_source: "off"   # off/news/mock/xgb_proxy
+    # Hybrid: XGB SELL 신뢰도 이 임계값 이상일 때만 RL 보류 무시 매도
+    xgb_sell_confidence_threshold: 0.60
 
 # ── 전략 파라미터 ──
 strategy:
-  name: "factor_rl"
+  name: "factor_hybrid"
   params:
     rsi_period: 14
     macd_fast: 12

@@ -5,233 +5,262 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Run backtest (compares strategies: factor_only, factor_macd, factor_kdj, factor_decision_tree, factor_xgboost, factor_rl, factor_hybrid)
+# Backtest — compares strategies (factor_only, factor_macd, factor_kdj, factor_decision_tree, factor_xgboost, factor_rl, factor_hybrid)
 python main.py backtest
+python main.py backtest --strategy factor_hybrid       # single strategy, faster
+python main.py backtest --factor-module both           # alpha101 + alpha158
+python main.py backtest --review                       # auto-run codex_review after
+python main.py backtest --llm-filter mock              # apply rule-based LLM filter (matches live)
+python main.py backtest --llm-filter real              # apply actual Claude API (slow, expensive)
 
-# Run live trading (requires KIS API keys in config/.env)
+# Live trading (KIS virtual/real, config/.env required)
 python main.py live
 
-# Train a specific ML timing model
-python main.py train --model xgboost          # options: decision_tree, xgboost, lightgbm, lstm, transformer, rl
+# ML training / retraining
+python main.py train --model xgboost                   # options: decision_tree, xgboost, lightgbm, lstm, transformer, rl
+python main.py retrain --model xgboost                 # replaces only if F1 improves
 
-# Retrain model with latest data (replaces only if new model is better)
-python main.py retrain --model xgboost
-
-# Check virtual trading account status
+# Account status
 python main.py status
 
-# Run specific strategy only (faster)
-python main.py backtest --strategy factor_rl
-
-# Custom config file
-python main.py backtest --config config/settings.yaml
-
-# Select factor module (alpha101, alpha158, both)
-python main.py backtest --factor-module both
-
-# Threshold sweep (buy_threshold grid search for hybrid strategy)
+# Grid search: Hybrid buy_threshold (uses pool cache if present)
 python scripts/threshold_sweep.py
 
+# SAPPO pipeline
+python scripts/fetch_daily_news.py                     # today's news + sentiment (cron 16:00)
+python scripts/fetch_daily_news.py --date 20260419     # backfill
+python scripts/fetch_daily_news.py --codes 005930 035420
+python scripts/weekly_sappo_report.py --slack          # weekly IC / training-run comparison (cron Sat 07:00)
+
 # Codex CLI review pipeline (3 modes)
-python scripts/codex_review.py daily                       # today's trading results
-python scripts/codex_review.py daily --date 20260419       # specific date
-python scripts/codex_review.py backtest                    # latest backtest log
-python scripts/codex_review.py backtest --comparison reports/backtest_comparison_*.csv
-python scripts/codex_review.py code                        # uncommitted changes (default)
-python scripts/codex_review.py code --base main            # diff vs main branch
+python scripts/codex_review.py daily                   # today's trading results → reports/codex_daily_YYYY-MM-DD.md
+python scripts/codex_review.py backtest                # latest backtest log
+python scripts/codex_review.py code --base main        # diff vs main branch
 
-# Auto-trigger codex review after backtest completes
-python main.py backtest --review
+# LLM decision IC analysis
+python scripts/llm_ic_analysis.py --forward 5 --days 30
 
-# Python executable (Windows python via WSL)
+# Windows Python via WSL — always use this executable
 /mnt/e/SuperTrader/venv/Scripts/python.exe
 ```
 
-No test suite exists yet (`tests/` directory is empty).
+No test suite exists (`tests/` directory is empty).
 
 ## Architecture
 
-SuperTrader is a Korean stock (KOSPI/KOSDAQ) trading system that combines **factor-based stock selection** with **ML-based timing signals** and **LLM-based signal validation**.
+SuperTrader is a Korean stock (KOSPI/KOSDAQ) auto-trading system combining **factor-based stock selection**, **ML/RL timing signals**, **LLM signal validation (with rule-based post-check)**, and **news-based SAPPO sentiment augmentation** for RL retraining.
 
 ### Five execution modes
-- **backtest**: Runs 6 strategies on historical data, outputs comparison table
-- **live**: Scheduled auto-trading via KIS broker API with risk management
-- **train**: Trains ML timing models on historical OHLCV data
-- **retrain**: Retrains with latest data, replaces model only if F1 improves
-- **status**: Displays current account holdings and P&L
+- **backtest**: Runs strategies on historical data with optional LLM filter
+- **live**: Scheduled auto-trading via KIS broker API
+- **train** / **retrain**: ML timing models
+- **status**: Account holdings and P&L
 
 ### Live Trading Pipeline
 
 ```
-startup: build_stock_pool() → 30 stocks via factor scoring
-    ↓
-every 5 min: RL (PPO) generate_signal() → BUY/SELL/HOLD
-    ↓
-LLM validation (Claude Sonnet 4.6) → confirm or reject signal
-    ↓
-if confirmed: RiskManager validates → OrderManager executes via KIS API
-    ↓
-monthly: rebalance_pool() re-selects top 30 stocks
-    ↓
-weekly (Saturday): retrain model if new one beats old F1/Sharpe
+startup:
+  _restore_pool_from_disk()  → reads data/current_pool.json, skip rebalance if ≥10 stocks
+    └─ fallback: rebalance_pool() builds 30-stock pool via factor scoring
+
+every 5 min (market hours):
+  get_balance() → sync held_codes
+  stop_loss check (LLM-free, immediate)
+  force-sell pool exits (held_codes - pool_codes)
+  for each stock in pool:
+    strategy.generate_signal() → BUY/SELL/HOLD
+    if actionable: LLM validate → rule post-check (rule wins if disagree)
+    if confirmed: RiskManager.validate_order → OrderManager → KIS API
+  check_filled() → emit ✅ confirmation after ~5min
+  save_daily_pnl snapshot
+
+daily 15:40: daily_report (Slack + Notion)
+daily 16:00: SAPPO fetch (news + sentiment)
+monthly day=1 08:30: rebalance_pool
+weekly Sat 06:00: ML retrain
+weekly Sat 07:00: SAPPO weekly report (Slack)
 ```
 
-### Data Pipeline (backtest mode)
-
-Backtest and live use the **same factor pipeline** for stock selection:
+### Data Pipeline (backtest mode — uses same factor pipeline as live)
 
 ```
-market_data.get_universe() → KOSPI stocks (filtered by market cap/volume)
+market_data.get_universe()                  → KOSPI stocks filtered by cap/volume (+ fallback if <30 result)
+market_data.get_ohlcv_batch()              → {code: OHLCV DataFrame}
+market_data.filter_by_listing_date(start)   → drops post-IPO stocks (partial survivorship fix)
     ↓
-market_data.get_ohlcv_batch() → {code: OHLCV DataFrame}
+main._build_pool_history_factor_based()
+    pool cache hit?  → load data/pool_cache/pool_<hash>.json (config-hash keyed)
+    else:
+      per rebalance date:
+        compute factors → neutralize → rolling IC report (ic_lookback=12) → top-30
+      save cache
     ↓
-main._build_pool_history_factor_based() → calls build_stock_pool() per rebalance date
-    (220 factors [alpha101+alpha158] → neutralization → IC-weighted composite → top 30)
+main._train_models_if_needed()              → walk-forward prefix (train_ratio=0.5) if models missing
     ↓
-main._train_models_if_needed() → trains DT/XGBoost if models/ is empty
+comparison.run_strategy_comparison()        → per strategy in PortfolioBacktestEngine
     ↓
-comparison.run_strategy_comparison() → runs all strategies through PortfolioBacktestEngine
-    ↓
-metrics.calculate_metrics() + report.print_comparison_table()
+report.print_comparison_table()
 ```
 
 ### Strategy Layer (`src/strategy/`)
 
-All strategies inherit `BaseStrategy` (in `base.py`) and implement `generate_signal(code, df) → TradeSignal`.
+All strategies inherit `BaseStrategy` and implement `generate_signal(code, df) → TradeSignal`.
 
-- **FactorOnlyStrategy**: Rebalancing-only, no intra-period timing. Uses `commit_pool` / `update_pool` for the backtest engine to detect.
-- **FactorMACDStrategy**: MACD golden/death cross signals with RSI confirmation.
-- **FactorKDJStrategy**: KDJ overbought/oversold + J-line crossover signals.
-- **FactorMLStrategy**: Wraps any ML model via `TimingPredictor`. Loads model by type string + path.
-- **FactorRLStrategy**: PPO RL agent with **business-day holding tracking**. Uses `_business_days_held()` to convert entry_date to actual holding days, matching the daily-bar training environment. `.pt` file.
-- **FactorHybridStrategy**: XGBoost(alpha generator) + RL(risk/timing filter). BUY requires both models to agree; SELL executes on XGBoost alone (risk management priority). Backtest: +96.5% return, Sharpe 0.81, MDD -11.8% with `buy_threshold=0.09`.
+- **FactorOnlyStrategy**: `commit_pool()` + `update_pool()` — rebalance-only. Engine triggers auto BUY on new entries.
+- **FactorMACDStrategy**, **FactorKDJStrategy**: Classic technical signals.
+- **FactorMLStrategy**: Wraps any ML model via `TimingPredictor`.
+- **FactorRLStrategy**: PPO agent with business-day holding tracking. Live `sync_positions()` uses DB → chart estimate → today fallback for entry dates.
+- **FactorHybridStrategy**: XGBoost (alpha) + RL (timing/risk). BUY requires both; SELL on XGBoost alone. After 2026-04-20 fixes: **+63.3% return, Sharpe 0.45, MDD -21.8%** with `buy_action_threshold=0.07` (sweep optimum).
 
-`Signal` enum: `BUY`, `SELL`, `HOLD`. `TradeSignal` dataclass includes strength (0-1), reason, stop_loss, take_profit.
+**Important**: `FactorRLStrategy` and `FactorHybridStrategy` accept `current_date` kwarg in `generate_signal()` and `sync_positions()` (with `entry_dates` dict) so backtest uses correct holding days. Live mode omits these and falls back to `datetime.now()`.
+
+### Pool Exit Handling (Item 1 fix, 2026-04-19)
+
+- **Backtest engine** (`portfolio_engine.py:216-237`): `old_set - new_set` force-SELL always runs (not gated on `commit_pool`). Only new-entry auto-BUY is restricted to `commit_pool` strategies (FactorOnly).
+- **Live `check_signals()`**: `held_codes - pool_codes` get force-SELL with `signal_type="pool_exit"` logged, `save_holding` removed. Before this fix, delisted-from-pool holdings were kept indefinitely until stop-loss.
+- The "not in self._pool → SELL" branch was dead code in all non-FactorOnly strategies (never called) — removed.
 
 ### Timing Models (`src/timing/`)
 
-- **features.py**: Builds ~30 features from OHLCV (RSI, MACD, KDJ, Bollinger Bands, ATR, ADX, MFI and their derivatives)
-- **labels.py**: Forward N-day returns → 1 (BUY if > +2%), -1 (SELL if < -2%), 0 (HOLD)
-- **trainer.py**: Training pipeline, dispatches to model-specific modules
-- **predictor.py**: Unified inference interface — `TimingPredictor(model_type, model_path).predict(df) → 1/0/-1`
-- **retrain.py**: Auto-retraining — trains new model, compares F1/accuracy against existing, replaces only if improved, backs up old model
-- **llm_validator.py**: LLM signal validation — sends ML signal + technical context to Claude Sonnet 4.6 (configurable model), confirms or rejects. Relaxed prompt: BUY blocked only when RSI≥85 AND 1-day return≥+10% simultaneously; SELL always confirmed. RL model signals are respected by default.
-- Model implementations: `decision_tree.py`, `gradient_boost.py` (XGBoost/LightGBM), `lstm_model.py`, `transformer_model.py`
-- **rl_env.py**: Trading Gym environment — State(30 features + 3 position) / Action(BUY/HOLD/SELL) / Reward: Differential Sharpe Ratio + drawdown penalty + transaction cost. Log-return based risk-adjusted reward
-- **rl_agent.py**: PPO Actor-Critic (shared backbone + LayerNorm) + GAE (λ=0.95) + mini-batch update. Legacy GRPO model auto-conversion supported. Enables `cudnn.benchmark` when CUDA available.
-- **rl_trainer.py**: Multi-stock batch rollout → PPO update, walk-forward validation, Sharpe-based model selection, early stopping. Rollout collection uses **ThreadPoolExecutor** (8 workers, CPU inference) for ~2x speedup. GPU used only for PPO batch update. Mini-batch size auto-scales by VRAM (6GB → 384).
+- **features.py**: ~30 features from OHLCV (RSI, MACD, KDJ, BB, ATR, ADX, MFI + derivatives)
+- **labels.py**: Forward N-day returns → 1/-1/0 with ±2% thresholds
+- **trainer.py**: Dispatch. RL path loads sentiment_map from DB when `config.timing.rl.sentiment_lambda > 0`
+- **predictor.py**: `TimingPredictor(model_type, path).predict(df) → 1/0/-1`
+- **retrain.py**: Trains new, compares F1/accuracy, replaces only if improved, backs up old
+- **llm_validator.py**:
+  - `SignalValidator` — Claude Sonnet 4.6 (`claude-sonnet-4-6`), JSON-schema-ish 확정/보류
+  - Prompt: conservative. BUY holds if (RSI≥80 AND 1d≥+7%) OR RSI≥90 OR 1d≥+15% OR 5d≥+25%. SELL holds only if MA20-up AND MA5-up AND RSI≥50 AND 1d≥-1% AND 5d≥+1% (all five). Strict interpretation clause forbids loose phrasing.
+  - `apply_rule_check()` post-check: re-evaluates rules deterministically. If LLM disagrees, **rule wins** (logged as WARNING). On LLM API error, falls back to rule.
+  - `MockSignalValidator` — same rules, no API call. Used by backtest `--llm-filter mock`.
+- **sentiment_generator.py**: Claude Haiku + strict JSON output → `{score: -1~+1, confidence, rationale}`. Stores to `sappo_sentiment_scores`. Cache-control on system prompt for 90% cost cut.
+- **rl_env.py**: State(29 features + 3 position), Action(BUY/HOLD/SELL), Reward = DSR + drawdown penalty + holding cost ramp + opportunity weight. **SAPPO**: `reset(df, sentiment_series)` + `step()` adds `sentiment_lambda × sentiment(date)` to reward.
+- **rl_agent.py**: PPO Actor-Critic (shared backbone + LayerNorm) + GAE (λ=0.95). GRPO legacy auto-convert. `collect_episode(reset_env=False)` option for SAPPO pre-reset env.
+- **rl_trainer.py**: Multi-stock ThreadPoolExecutor rollout → PPO batch update (GPU). Auto-saves training-run record to `sappo_training_runs` DB (lambda, Sharpe, return, MDD, run_name).
 
-sklearn models save as `.pkl`, torch models as `.pt`.
+sklearn models save `.pkl`, torch models `.pt`.
 
 ### RL Training-Live Alignment
 
-The RL model trains on **daily bars** (1 step = 1 trading day). In live mode, signals are checked every 5 minutes, but `holding_days` is computed as **actual business days** since entry (via `_business_days_held()`), not cycle count. This ensures the model's learned holding behavior matches real-world time.
+RL trains on daily bars (1 step = 1 trading day). Live checks every 5 min but `holding_days` uses **actual business days** since entry (via `_business_days_held(entry_date, reference_date)`). Backtest passes `current_date` so holding is computed against backtest time, not `datetime.now()`.
 
-**Reward v3 (current)**: `holding_cost=0.0002` + ramp `0.00005/day`, `opportunity_weight=0.35`. Produces ~5-17 trades/episode with Sharpe ~0.34, win rate ~78%. Higher holding cost or additional anti-churn penalties cause trades to collapse to near zero — v4 experiment (short_hold_penalty, roundtrip_penalty, churn_penalty) was reverted back to v3.
+**Reward v3 (current)**: `holding_cost=0.0002` + ramp `0.00005/day`, `opportunity_weight=0.35`. v4 (anti-churn) was reverted.
 
-### RL Action Thresholds
+### RL Action Thresholds (`config/settings.yaml` → `timing.rl`)
 
-The RL model outputs action probabilities P(HOLD), P(BUY), P(SELL). Configurable thresholds in `config/settings.yaml` → `timing.rl`:
-- `buy_action_threshold: 0.09` — P(BUY) > 9% triggers BUY (optimized via grid search from [0.05-0.15])
-- `sell_action_threshold: 0.06` — P(SELL) > 6% triggers SELL (model average level)
+- `buy_action_threshold: 0.07` — optimized via grid search after 2026-04-19 fixes
+- `sell_action_threshold: 0.06`
+- `sentiment_lambda: 0.0` — SAPPO off by default, 0.1 when news data ≥6 months accumulated
+- `sentiment_source: "off"` — off / news / mock / xgb_proxy
 
-These flow through `factor_rl.py` → `predictor.py` → `rl_agent.py`. Live trading calls `sync_positions(held_codes, prices, avg_prices)` each cycle to pass actual holdings to the RL strategy. Buy date resolution order: **DB (`holding_positions`) → daily chart estimation (closest close to avg_price) → today (fallback)**. Estimated dates are auto-saved to DB for future lookups.
+Flow: `factor_rl.py` → `predictor.py` → `rl_agent.py`. Live `sync_positions()` passes `avg_prices` for DB → chart estimate → today fallback buy_date resolution.
 
 ### Backtest Engine (`backtest/`)
 
-`PortfolioBacktestEngine.run()` iterates every trading day across all dates:
-1. On rebalancing dates: updates stock pool, sells exited stocks, buys new entries
-2. Daily: calls `strategy.generate_signal()` for each stock in pool
-3. Tracks positions, cash, equity curve with commission (0.015%) and tax (0.23%)
+`PortfolioBacktestEngine.run()`:
+1. Rebalance: pool diff → force-SELL exits (always) + auto-BUY new entries (only for `commit_pool` strategies)
+2. Stop loss check (T-day close → T+1 open sell)
+3. Daily timing signals: `strategy.generate_signal(current_date=date)` → pending_orders
+4. Optional `llm_validator` (if passed): applies to each actionable signal
+5. `strategy.sync_positions(held, prices, avg_prices, entry_dates, current_date)` at day end
 
-**Performance**: Engine pre-builds date→price dict caches and uses `bisect` + O(1) dict lookup for price retrieval. Date strings are converted once during initialization. MACD/KDJ/ML strategies still take ~30 min each for 7-year backtests due to `generate_signal()` per stock per day.
-
-### Configuration (`src/config.py`)
-
-Pydantic models loaded from `config/settings.yaml`. `load_config(path)` sets a module-level singleton; `get_config()` retrieves it. Key sections: `universe`, `factors`, `timing`, `strategy`, `risk`, `backtest`, `schedule`.
-
-Secrets (KIS API keys, Slack token, Anthropic API key) loaded from `config/.env` via pydantic-settings.
-
-### Data Sources (`src/data/`)
-
-- **market_data.py**: `pykrx` for universe/market cap, `FinanceDataReader` for OHLCV
-- **indicators.py**: Technical indicator calculations (pure pandas/numpy)
-- **factor_data.py**: Fundamental data (PER, PBR, dividend yield)
+**llm_validator param**: `--llm-filter mock` → `MockSignalValidator` (deterministic, free). `--llm-filter real` → `SignalValidator` (Claude API, ~$5-10/run).
 
 ### Factor System (`src/factors/`)
 
-- **alpha101.py**: ~62 quantitative factors (momentum, volatility, volume, fundamental)
-- **alpha158.py**: 158 Qlib-style factors — candlestick(9), raw price(4), rolling time-series(115: 23 types × 5 windows [5,10,20,30,60d]), volume(30: 6 types × 5 windows). All prefixed `a158_` to avoid name collision.
-- **calculator.py** → **validity.py** (IC analysis) → **neutralizer.py** (industry/market-cap) → **composite.py** (IC-weighted scoring) → **stock_pool.py** (top-N selection)
-- `_get_factor_functions()` dispatches to alpha101/alpha158/both based on `config.factors.factor_module`
-- `build_stock_pool()` accepts optional `ohlcv_dict` for backtest data reuse
+- **alpha101.py** + **alpha158.py** → 220 factors (prefix `a158_` to avoid collision)
+- Pipeline: `calculator.py` → `neutralizer.py` (industry/mcap) → `validity.py` (IC analysis) → `composite.py` (IC-weighted or equal) → `stock_pool.py` (top-N)
+- **`build_stock_pool(..., return_factors=True)`** returns `(pool, factor_df)` for trainer to accumulate factor_history
+- `_build_pool_history_factor_based()` accumulates rolling (factor_history, return_history) and rebuilds `factor_report` every rebalance → enables **actual** IC-weighted composite (was falling back to equal-weight before 2026-04-19 fix)
+- **pool_cache.py** (new): `data/pool_cache/pool_<sha1:12>.json` keyed on 14 config fields. Saves ~60min on reruns.
 
-Rebalancing frequency: **monthly** (매월 첫 거래일). Both backtest and live use the same pipeline. Changed from biweekly based on academic research showing monthly rebalancing reduces turnover by ~50% with negligible impact on returns.
+Rebalancing: monthly (day 1). Live restart uses `_restore_pool_from_disk()` to skip rebalance — prevents pool-diff mass trades on restart.
 
 ### Database (`src/db/`)
 
-SQLAlchemy ORM with SQLite. `init_db(path)` creates tables (guarded against duplicate calls). Models: `TradeLog`, `DailyPnL`, `PositionLog`, `SignalLog`, `RuntimeStatus`, `HoldingPosition`. `save_signal_log()` records LLM validation results; `get_recent_signals(limit, days)` queries them for the web dashboard. `save_runtime_status()` writes a singleton row for live pipeline state.
+SQLAlchemy + SQLite (`data/trading.db`, WAL mode). Two module sets coexist in same DB:
 
-**HoldingPosition** (`holding_positions` table): Tracks current positions with `buy_date` (YYYYMMDD). Written on BUY fill (`save_holding()`), deleted on SELL/stop-loss fill (`remove_holding()`). `get_holding_buy_date(code)` returns the stored buy date. This solves the holding_days=0 bug where system restarts would lose the actual entry date.
+**Core tables (`src/db/models.py`)**:
+- `trade_logs`, `daily_pnl`, `position_logs`, `holding_positions`, `runtime_status`
+- `signal_logs` — `signal_type ∈ {llm, summary, pool_exit}`. Used by web dashboard and `llm_ic_analysis.py`.
+
+**SAPPO tables (`src/db/sappo_models.py`, `expire_on_commit=False`)**:
+- `sappo_news` — raw articles (stock_code, date, url UNIQUE)
+- `sappo_sentiment_scores` — (stock_code, date) PK, score/confidence/rationale
+- `sappo_training_runs` — PPO/SAPPO run history (lambda, Sharpe, return, MDD, model_path)
+- `sappo_sentiment_ic` — IC measurement snapshots
+- `sappo_weekly_metrics` — week-start PK, aggregates for verification reports
+
+`HoldingPosition.buy_date` (YYYYMMDD) solves holding_days=0 bug on restart.
 
 ### Web Dashboard (`web/`)
 
-Flask app (`web/app.py`) for real-time account monitoring. Run separately from main process. Auto-refreshes every 30 seconds.
-
 ```bash
-# Run dashboard (from project root)
 /mnt/e/SuperTrader/venv/Scripts/python.exe web/app.py
 ```
 
-**Dashboard sections**: Summary cards (total value, asset change, realized P&L, unrealized P&L, available cash, today volume), Cumulative Return chart, Holdings table (clickable for technical indicator charts), Factor Pool table (30 stocks with composite scores, scrollable), Recent Signals log (RL + LLM validation).
+Sections: Summary cards, Cumulative Return chart, Holdings table (click for indicators), Factor Pool (30 stocks), Recent Signals (RL + LLM).
 
-**API endpoints**: `/api/status` (account + realized P&L), `/api/pool` (factor pool from `data/current_pool.json`), `/api/signals` (DB or log fallback), `/api/returns` (cumulative return from DailyPnL), `/api/indicators/<code>` (technical charts).
-
-**Factor Pool JSON**: Live trading writes `data/current_pool.json` on each rebalance with stock codes, names, and composite scores. Dashboard reads this file (handles EUC-KR/UTF-8 encoding from Windows Python).
+API: `/api/status`, `/api/pool` (reads `data/current_pool.json` with encoding fallback), `/api/signals`, `/api/returns`, `/api/indicators/<code>`.
 
 ### Live Trading (`src/broker/`, `src/risk/`, `src/notification/`)
 
-- **kis_client.py**: Korean Investment & Securities REST API (supports virtual/real via `is_virtual` config). Rate limited to 10 calls/sec with auto-retry.
-- **order.py** / **account.py**: Order execution and balance queries. Virtual/real trading uses different tr_id prefixes (VTTC vs TTTC). `AccountSummary` has both `total_deposit` (D+2 settled cash) and `available_cash` (order-ready amount including unsettled sell proceeds). `get_realized_pnl()` queries daily realized P&L via KIS API.
-- **risk/manager.py**: Position sizing (5% per stock, ATR-based), daily loss limit (-5%), stop loss (-7%), kill switch (3 consecutive errors). Kill switch monitors all scheduled jobs (signal check, rebalance, retrain).
-- **notification/slack_bot.py**: Trade alerts and daily reports to `#supertrader` channel (requires `slack-sdk`)
-- **notification/notion_reporter.py**: Daily trading log to Notion database (positions table, trade list, AI feedback)
+- **kis_client.py**: KIS REST API, virtual/real switch via `is_virtual`. 10 calls/sec rate limit.
+- **order.py**: `Order.reference_price` (signal-time price) for market-order notification display. `check_filled()` updates filled_qty/price post-fill.
+- **account.py**: `AccountSummary` with `total_deposit` (D+2) and `available_cash` (unsettled-aware).
+- **risk/manager.py**: 5%/position, -5% daily loss limit, -7% stop loss, kill switch (3 consecutive errors).
+- **notification/slack_bot.py**: **Dual channels** — `#supertrader` (system/reports/feedback), `#super_trader_buy_sell` (signals/fills/fails/stop-loss). `SLACK_TRADE_CHANNEL` env override supported.
+- **notification/notion_reporter.py**: Daily trading log to Notion DB.
 
-### Live Trading Schedules (APScheduler)
+### Live Trading Schedules (APScheduler, registered in `main.py::run_live`)
 
-- **Signal check**: every `check_interval_sec` (default 300s) starting at market_open (09:00)
-- **Daily report**: cron at post_market (15:40)
-- **Monthly rebalance**: cron day=1 at pre_market (08:30)
-- **Weekly retrain**: cron on Saturday at 06:00
+- Signal check: every `check_interval_sec` (300s) from market_open (09:00)
+- Daily report: 15:40
+- **Daily SAPPO fetch: 16:00** → `scripts/fetch_daily_news.py`
+- Monthly rebalance: day 1 at pre_market (08:30)
+- Weekly retrain: Saturday 06:00
+- **Weekly SAPPO report: Saturday 07:00** → `scripts/weekly_sappo_report.py --slack`
+
+### SAPPO (Sentiment-Augmented PPO) Pipeline
+
+External news → LLM sentiment scalar → RL training reward (`reward += λ × sentiment(code, date)`). Preserves XGBoost↔RL peer structure; sentiment is external info (no circularity). Inference doesn't use sentiment.
+
+**Data flow**: Google News RSS → `sappo_news` → Claude Haiku → `sappo_sentiment_scores` → `TradingEnv.reset(sentiment_series=)` during training.
+
+**Activation conditions** (until met, keep `sentiment_lambda=0.0`):
+1. ≥6 months of daily sentiment per stock accumulated
+2. `sappo_weekly_metrics.sentiment_ic_5d > 0` with p < 0.05
+3. Baseline (λ=0) Sharpe recorded in `sappo_training_runs` for comparison
+
+Then: set `sentiment_lambda=0.1, sentiment_source="news"` → `python main.py train --model rl` → compare new run's Sharpe vs baseline.
 
 ### Codex CLI Review Pipeline (`scripts/codex_review.py`)
 
-Single entry point that delegates analysis to the `codex` CLI. Writes review outputs to `reports/codex_<mode>_<YYYY-MM-DD>.md`.
+Three modes writing to `reports/codex_<mode>_<YYYY-MM-DD>.md`:
+- `daily` — DB snapshot → `codex exec --sandbox read-only`
+- `backtest` — latest `logs/*backtest*.log` + optional CSV → `codex exec`
+- `code` — `codex review` with `--base`, `--uncommitted`, `--commit`
 
-Three modes:
-- **daily** — queries `DailyPnL`, `TradeLog`, `HoldingPosition`, `PositionLog`, `SignalLog` for a date and pipes JSON to `codex exec`
-- **backtest** — tails the latest `logs/*backtest*.log` (+ optional comparison CSV) and pipes to `codex exec`
-- **code** — delegates to `codex review` (supports `--base`, `--uncommitted`, `--commit`)
-
-Auto-triggers:
-- `python main.py backtest --review` saves `reports/backtest_comparison_<stamp>.csv` and runs `codex_review.py backtest`
-- Live `daily_report()` calls `codex_review.py daily` when `codex.enabled=true` in `config/settings.yaml`
-
-Codex runs with `--sandbox read-only` (for `exec`) so the reviewer cannot mutate the repo. Config flags in `config/settings.yaml` → `codex`: `enabled`, `daily_review`, `model`.
+Auto-triggers: `--review` flag on backtest, `config.codex.enabled=true` for daily.
 
 ### Key Design Decisions
 
-- Duplicate buy prevention: `held_codes` set checked before BUY orders
-- LLM validation gates all BUY/SELL signals; falls back to ML-only if API key missing or API error
-- Model retraining only replaces if F1 improves by >0.5%p; old model auto-backed up
-- Terminal encoding issues with Korean stock names in WSL — use stock code for reliable identification
-- Windows Python writes files in EUC-KR by default; web dashboard handles multi-encoding reads
+- **Pool restore on restart** (`_restore_pool_from_disk`) — prevents mass pool-diff trades when restarting intraday. Only rebuilds if <10 stocks saved.
+- **Rule post-check** for LLM — deterministic rules override LLM if they disagree. Prevents LLM's loose interpretations (e.g. "RSI near 85" = hold) from breaking strategy intent.
+- **Sentiment is learning-only** — SAPPO injects into reward during training; inference path unchanged.
+- **Duplicate buy prevention** via `held_codes` set before every BUY order.
+- **Model retraining** only replaces if F1 improves by >0.5%p; old model auto-backed up.
+- **LLM validation** falls back to rule-based when API key missing or 404.
+- **KIS order flow**: submit (no fill info) → next cycle `check_filled()` → emit ✅ confirmation with real filled_qty/price. Immediate notification uses `reference_price` (signal-time estimate).
 
 ### Environment Gotchas
 
-- **WSL + Windows venv**: The project uses a Windows Python venv from WSL. Always use `/mnt/e/SuperTrader/venv/Scripts/python.exe`, not a Linux python.
-- **Trained models in `models/`**: `.pkl` (sklearn) and `.pt` (torch) files. Not checked into git — must be trained locally via `python main.py train`. RL model backups: `rl_timing.backup_grpo.pt` (legacy), `backup_ppo_v1.pt`, `backup_ppo_v2.pt` (v3 reward).
-- **PyTorch CUDA**: `torch 2.11.0+cu126` installed for GTX 1660 SUPER 6GB. Rollout is CPU-bound (env simulation); GPU only helps PPO batch updates.
-- **Backtest duration**: Pool build ~90min (220 factors × 84 monthly rebalances). Single strategy ~40 min each. `factor_only` runs in seconds. Full comparison ~5 hours.
-- **Universe filter**: KOSPI, min market cap 5000억, min avg volume 300K. Produces ~123 large-cap stocks.
-- **File encoding**: Windows Python outputs EUC-KR/CP949 for Korean text. JSON files (e.g. `data/current_pool.json`) and logs need multi-encoding fallback when reading from WSL/Flask.
+- **WSL + Windows venv**: use `/mnt/e/SuperTrader/venv/Scripts/python.exe`, not Linux python.
+- **pykrx cross-sectional API broken in this env**: `get_market_cap`, `get_market_ticker_list`, `get_market_fundamental` return empty DataFrame due to KRX endpoint changes. OHLCV per-ticker still works. This blocks proper historical universe construction — Item 3 fix only does IPO filter via OHLCV, not true survivorship correction.
+- **FDR `Volume` column is intraday today**: empty at market open → universe shrinks to 1-2 stocks. `get_universe()` has fallback: if filtered result <30 stocks, skip volume filter.
+- **Trained models in `models/`**: `.pkl` (sklearn), `.pt` (torch). Not checked into git. RL backups: `rl_timing.backup_grpo.pt`, `backup_ppo_v1.pt`, `backup_ppo_v2.pt`.
+- **PyTorch CUDA**: `torch 2.11.0+cu126` for GTX 1660 SUPER 6GB. Rollout CPU-bound; GPU only helps PPO batch updates. Mini-batch auto-scales (6GB → 384).
+- **Backtest duration**: Pool build ~90min (84 monthly × 220 factors). Single strategy ~40min. `factor_only` seconds. Full comparison ~5 hours. Pool cache hit cuts first stage to ~1s.
+- **Universe filter**: KOSPI, min cap 5,000억, min 20-day volume 300K. Produces ~123 large caps.
+- **File encoding**: Windows Python writes EUC-KR/CP949 for Korean. JSON files (`data/current_pool.json`) and logs need multi-encoding fallback from WSL/Flask.
+- **Korean in terminal logs**: often garbled in WSL display (cp949 pipe); files are fine. Use stock codes for reliable identification.
+- **Google News RSS instead of Naver Finance**: Naver's per-stock news page is dynamically loaded (non-scrapable HTML). News collector uses `news.google.com/rss/search` with Korean ticker name.
