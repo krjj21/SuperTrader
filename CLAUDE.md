@@ -57,7 +57,20 @@ python scripts/compare_factors.py
 
 Primary config: `config/settings.yaml` (+ `config/.env` for KIS / Anthropic / Slack / Notion keys).
 
-No test suite exists (`tests/` directory is empty).
+### Tests & Syntax checks
+
+```bash
+# Strategy invariant suite (T→T+1 execution, force-pool-exit, hybrid BUY/SELL gating, position sizing)
+./venv/Scripts/python.exe -m unittest tests.test_strategy_invariants -v
+
+# Run a single test method
+./venv/Scripts/python.exe -m unittest tests.test_strategy_invariants.StrategyInvariantTests.test_hybrid_buy_requires_both_xgb_and_rl
+
+# Compile-only check (catches syntax errors without runtime deps)
+python3 -m compileall -q main.py backtest src scripts tests
+```
+
+Tests use stdlib `unittest` (no pytest). Mock broker/model/network. Add new tests to `tests/test_*.py` focused on **strategy invariants** (no lookahead, T→T+1 execution, pool exits, risk sizing, live/backtest alignment) — see also `AGENTS.md`.
 
 ## Architecture
 
