@@ -200,6 +200,21 @@ class CodexConfig(BaseModel):
     model: str = ""                  # codex 모델 override (빈 문자열이면 기본값)
 
 
+class RegimeConfig(BaseModel):
+    """시장 국면(regime) 감지 설정.
+    enabled=False: 매일 라벨 산출/기록만, 매매 영향 없음 (dark-launch).
+    lambda=0: enabled여도 가중치/사이즈 모듈레이션 비활성.
+    """
+    enabled: bool = False
+    lambda_: float = Field(default=0.0, alias="lambda")
+    hmm_lookback_days: int = 60
+    hmm_n_states: int = 3
+    llm_override_threshold: float = 0.3
+    news_fetch_enabled: bool = True
+
+    model_config = {"populate_by_name": True}
+
+
 class AppConfig(BaseModel):
     kis: KISConfig = KISConfig()
     universe: UniverseConfig = UniverseConfig()
@@ -212,6 +227,7 @@ class AppConfig(BaseModel):
     database: DatabaseConfig = DatabaseConfig()
     logging: LoggingConfig = LoggingConfig()
     codex: CodexConfig = CodexConfig()
+    regime: RegimeConfig = RegimeConfig()
 
 
 # ──────────────────────────────────────────────

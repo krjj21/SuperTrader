@@ -26,6 +26,10 @@ python main.py status
 # Grid search: Hybrid buy_threshold (uses pool cache if present)
 python scripts/threshold_sweep.py
 
+# PIT universe metadata bootstrap (run once, then monthly)
+python scripts/build_universe_meta.py            # produces data/universe_meta.csv (~5,700 rows)
+python scripts/build_universe_meta.py --force    # rebuild even if file exists
+
 # SAPPO pipeline
 python scripts/fetch_daily_news.py                     # today's news + sentiment (cron 16:00)
 python scripts/fetch_daily_news.py --date 20260419     # backfill
@@ -40,9 +44,14 @@ python scripts/codex_review.py code --base main        # diff vs main branch
 # LLM decision IC analysis
 python scripts/llm_ic_analysis.py --forward 5 --days 30
 
+# Alpha101 vs Alpha158 A/B (factor_only backtest each, side by side)
+python scripts/compare_factors.py
+
 # Windows Python via WSL — always use this executable
 /mnt/e/SuperTrader/venv/Scripts/python.exe
 ```
+
+Primary config: `config/settings.yaml` (+ `config/.env` for KIS / Anthropic / Slack / Notion keys).
 
 No test suite exists (`tests/` directory is empty).
 
@@ -53,7 +62,8 @@ SuperTrader is a Korean stock (KOSPI/KOSDAQ) auto-trading system combining **fac
 ### Five execution modes
 - **backtest**: Runs strategies on historical data with optional LLM filter
 - **live**: Scheduled auto-trading via KIS broker API
-- **train** / **retrain**: ML timing models
+- **train**: Fits a fresh timing model from scratch
+- **retrain**: Trains a candidate, replaces the live model only if F1 improves (auto-backup)
 - **status**: Account holdings and P&L
 
 ### Live Trading Pipeline
@@ -110,15 +120,14 @@ All strategies inherit `BaseStrategy` and implement `generate_signal(code, df) �
 - **FactorMACDStrategy**, **FactorKDJStrategy**: Classic technical signals.
 - **FactorMLStrategy**: Wraps any ML model via `TimingPredictor`.
 - **FactorRLStrategy**: PPO agent with business-day holding tracking. Live `sync_positions()` uses DB → chart estimate → today fallback for entry dates.
-- **FactorHybridStrategy**: XGBoost (alpha) + RL (timing/risk). BUY requires both; SELL on XGBoost alone. After 2026-04-20 fixes: **+63.3% return, Sharpe 0.45, MDD -21.8%** with `buy_action_threshold=0.07` (sweep optimum).
+- **FactorHybridStrategy**: XGBoost (alpha) + RL (timing/risk). BUY requires both; SELL on XGBoost alone. As of 2026-04-20: **+63.3% return, Sharpe 0.45, MDD -21.8%** with `buy_action_threshold=0.07`. These figures came from `scripts/threshold_sweep.py` against the universe at that time — re-run the sweep if the universe, factor module, or RL model changes before trusting them.
 
 **Important**: `FactorRLStrategy` and `FactorHybridStrategy` accept `current_date` kwarg in `generate_signal()` and `sync_positions()` (with `entry_dates` dict) so backtest uses correct holding days. Live mode omits these and falls back to `datetime.now()`.
 
-### Pool Exit Handling (Item 1 fix, 2026-04-19)
+### Pool Exit Handling
 
 - **Backtest engine** (`portfolio_engine.py:216-237`): `old_set - new_set` force-SELL always runs (not gated on `commit_pool`). Only new-entry auto-BUY is restricted to `commit_pool` strategies (FactorOnly).
-- **Live `check_signals()`**: `held_codes - pool_codes` get force-SELL with `signal_type="pool_exit"` logged, `save_holding` removed. Before this fix, delisted-from-pool holdings were kept indefinitely until stop-loss.
-- The "not in self._pool → SELL" branch was dead code in all non-FactorOnly strategies (never called) — removed.
+- **Live `check_signals()`**: `held_codes - pool_codes` get force-SELL with `signal_type="pool_exit"` logged, `save_holding` removed. The "not in self._pool → SELL" branch in non-FactorOnly strategies is intentionally absent — pool-exit selling is handled centrally by the engine and live loop, not per-strategy.
 
 ### Timing Models (`src/timing/`)
 
@@ -136,8 +145,6 @@ All strategies inherit `BaseStrategy` and implement `generate_signal(code, df) �
 - **rl_env.py**: State(29 features + 3 position), Action(BUY/HOLD/SELL), Reward = DSR + drawdown penalty + holding cost ramp + opportunity weight. **SAPPO**: `reset(df, sentiment_series)` + `step()` adds `sentiment_lambda × sentiment(date)` to reward.
 - **rl_agent.py**: PPO Actor-Critic (shared backbone + LayerNorm) + GAE (λ=0.95). GRPO legacy auto-convert. `collect_episode(reset_env=False)` option for SAPPO pre-reset env.
 - **rl_trainer.py**: Multi-stock ThreadPoolExecutor rollout → PPO batch update (GPU). Auto-saves training-run record to `sappo_training_runs` DB (lambda, Sharpe, return, MDD, run_name).
-
-sklearn models save `.pkl`, torch models `.pt`.
 
 ### RL Training-Live Alignment
 
@@ -233,6 +240,26 @@ External news → LLM sentiment scalar → RL training reward (`reward += λ × 
 
 Then: set `sentiment_lambda=0.1, sentiment_source="news"` → `python main.py train --model rl` → compare new run's Sharpe vs baseline.
 
+### Point-in-Time Universe
+
+Universe membership is reconstructed per-date from `data/universe_meta.csv` (built by `scripts/build_universe_meta.py` from FDR `KRX-DESC` + `KRX-DELISTING`). This file is the source of truth for who was tradable when, including delisted stocks.
+
+- `get_universe(date, ohlcv_dict=None)` in `src/data/market_data.py`:
+  - `date is None` → legacy path (today's FDR `StockListing` snapshot). Live mode no-op.
+  - `date` set → filters meta by `listed_date <= date AND (delisted_date is NaT OR delisted_date >= date)`.
+  - Volume filter uses `ohlcv_dict[code].volume.rolling(20).mean().asof(date)` when `ohlcv_dict` is passed; otherwise volume column is left at 0 (filter skipped).
+  - **Cap filter known limit**: today's `Marcap` from FDR `KRX` listing is used (no historical shares-outstanding source). Delisted stocks are exempted from the cap filter (cap_map has no entry → would otherwise drop all historical members). This is a residual lookahead (Tier 3 unfixed).
+  - Result cached at `data/universe_cache/uni_<sha1:12>.csv` keyed on `(date, market, min_market_cap, min_avg_volume, meta_signature, vol_mode)`. Bypass with `SUPER_TRADER_DISABLE_UNIVERSE_CACHE=1`.
+- `main.py:run_backtest` seeds `get_ohlcv_batch()` with the **union** of `get_universe(d)` over all rebalance dates so delisted codes' OHLCV is also pulled.
+- `pool_cache._payload()` includes `pit_universe: True` and `meta_signature` (mtime+size SHA-1 of `universe_meta.csv`), so rebuilding the meta or upgrading from a pre-PIT cache automatically invalidates old `data/pool_cache/pool_*.json` (orphaned files can be deleted manually).
+- `filter_by_listing_date()` is preserved as a defensive net (no-op when meta is present; safety for legacy fallback).
+
+**Known PIT limits after Tier 1+2**:
+- **Cap filter is today-cap, not PIT.** A stock that crossed 5,000억 in 2023 may appear in 2020 universe. Tier 3 would require historical shares-outstanding (pykrx broken; needs KRX MDC scraper or paid feed).
+- **Sector/industry mapping is snapshot-only.** `get_sector_info(date)` returns today's sector. Acceptable for industry-neutralization, not for KOSPI200 membership reconstruction.
+- **Delisted-stock OHLCV depends on FDR retention.** Last ~10 years generally OK; pre-2014 coverage is thin.
+- **`KRX-DELISTING` Korean names are encoding-garbled.** Filtering uses code, so harmless. The `name` column in `universe_meta.csv` is unreliable for delisted rows.
+
 ### Codex CLI Review Pipeline (`scripts/codex_review.py`)
 
 Three modes writing to `reports/codex_<mode>_<YYYY-MM-DD>.md`:
@@ -255,7 +282,7 @@ Auto-triggers: `--review` flag on backtest, `config.codex.enabled=true` for dail
 ### Environment Gotchas
 
 - **WSL + Windows venv**: use `/mnt/e/SuperTrader/venv/Scripts/python.exe`, not Linux python.
-- **pykrx cross-sectional API broken in this env**: `get_market_cap`, `get_market_ticker_list`, `get_market_fundamental` return empty DataFrame due to KRX endpoint changes. OHLCV per-ticker still works. This blocks proper historical universe construction — Item 3 fix only does IPO filter via OHLCV, not true survivorship correction.
+- **pykrx cross-sectional API broken in this environment**: `get_market_cap`, `get_market_ticker_list`, `get_market_fundamental` return empty DataFrame due to KRX endpoint changes. Verified broken under both WSL Linux python and the Windows venv (`venv/Scripts/python.exe`) — it is not a WSL-only issue. OHLCV per-ticker still works. PIT membership is reconstructed via FDR `KRX-DESC` + `KRX-DELISTING` instead (see "Point-in-Time Universe" section below).
 - **FDR `Volume` column is intraday today**: empty at market open → universe shrinks to 1-2 stocks. `get_universe()` has fallback: if filtered result <30 stocks, skip volume filter.
 - **Trained models in `models/`**: `.pkl` (sklearn), `.pt` (torch). Not checked into git. RL backups: `rl_timing.backup_grpo.pt`, `backup_ppo_v1.pt`, `backup_ppo_v2.pt`.
 - **PyTorch CUDA**: `torch 2.11.0+cu126` for GTX 1660 SUPER 6GB. Rollout CPU-bound; GPU only helps PPO batch updates. Mini-batch auto-scales (6GB → 384).
@@ -264,3 +291,4 @@ Auto-triggers: `--review` flag on backtest, `config.codex.enabled=true` for dail
 - **File encoding**: Windows Python writes EUC-KR/CP949 for Korean. JSON files (`data/current_pool.json`) and logs need multi-encoding fallback from WSL/Flask.
 - **Korean in terminal logs**: often garbled in WSL display (cp949 pipe); files are fine. Use stock codes for reliable identification.
 - **Google News RSS instead of Naver Finance**: Naver's per-stock news page is dynamically loaded (non-scrapable HTML). News collector uses `news.google.com/rss/search` with Korean ticker name.
+- **Legacy/scratch files at repo root**: `run_dt_rl_backtest.py` and `*_result.txt` / `validation_result.txt` / `account_status.txt` are one-off scratch outputs, not part of the supported entry points. Don't take dependencies on them; treat as candidates for cleanup.

@@ -374,6 +374,52 @@
             z-index: 1;
         }
 
+        /* Returns Metrics Cards */
+        .returns-metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 12px;
+            padding: 16px 20px 4px 20px;
+        }
+        .returns-metric {
+            background: #0d1117;
+            border: 1px solid #30363d;
+            border-radius: 8px;
+            padding: 10px 14px;
+        }
+        .returns-metric-label {
+            font-size: 11px;
+            color: #8b949e;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+        .returns-metric-value {
+            font-size: 18px;
+            font-weight: 600;
+            color: #c9d1d9;
+        }
+        .returns-metric-value.positive { color: #3fb950; }
+        .returns-metric-value.negative { color: #f85149; }
+        .returns-metric-sub {
+            font-size: 11px;
+            color: #6e7681;
+            margin-top: 2px;
+        }
+        .regime-chip {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+        }
+        .regime-chip.risk_on_trend { background: rgba(63,185,80,0.15); color: #3fb950; border: 1px solid rgba(63,185,80,0.4); }
+        .regime-chip.high_vol_risk_off { background: rgba(248,81,73,0.15); color: #f85149; border: 1px solid rgba(248,81,73,0.4); }
+        .regime-chip.mean_revert { background: rgba(210,153,34,0.15); color: #d29922; border: 1px solid rgba(210,153,34,0.4); }
+        .regime-chip.unknown { background: rgba(110,118,129,0.15); color: #8b949e; border: 1px solid rgba(110,118,129,0.4); }
+
         /* Chart Modal */
         .chart-modal {
             position: fixed;
@@ -451,7 +497,7 @@
         <div class="timestamp">
             <span class="status-dot"></span>
             <span id="ts">Loading...</span>
-            <span style="margin-left:8px;color:#484f58;">30s auto-refresh</span>
+            <span style="margin-left:8px;color:#484f58;">Reload page to refresh</span>
         </div>
     </div>
 
@@ -480,12 +526,17 @@
         <div class="loading">Loading...</div>
     </div>
 
-    <!-- Returns Chart -->
+    <!-- Returns Chart + Metrics -->
     <div class="table-wrap" style="margin-bottom:24px;">
-        <div class="table-header">Cumulative Return</div>
-        <div style="padding:20px;">
+        <div class="table-header">Returns</div>
+        <div id="returns-metrics" class="returns-metrics">
+            <!-- JS injects metric cards -->
+        </div>
+        <div style="padding:8px 20px 20px 20px;">
             <div id="returns-empty" class="loading" style="display:none;">No return data yet</div>
             <canvas id="returnsChart" height="100"></canvas>
+            <div style="margin-top:14px; font-size:11px; color:#8b949e; text-transform:uppercase; letter-spacing:0.5px;">Daily P&amp;L</div>
+            <canvas id="dailyPnlChart" height="60"></canvas>
         </div>
     </div>
 
@@ -964,8 +1015,63 @@
             </table></div>`;
         }
 
-        // ── Returns Chart ──
+        // ── Returns Chart + Metrics + Daily PnL ──
         let returnsChartObj = null;
+        let dailyPnlChartObj = null;
+
+        function fmtSignedPct(v) {
+            if (v === null || v === undefined || isNaN(v)) return '-';
+            return (v >= 0 ? '+' : '') + v.toFixed(2) + '%';
+        }
+        function regimeChipHtml(label) {
+            if (!label) return '<span class="regime-chip unknown">none</span>';
+            return `<span class="regime-chip ${label}">${label.replace(/_/g,' ')}</span>`;
+        }
+        function renderReturnsMetrics(m, regimeNow) {
+            const host = document.getElementById('returns-metrics');
+            if (!host) return;
+            if (!m || Object.keys(m).length === 0) { host.innerHTML = ''; return; }
+            const cumCls = m.cumulative_pct >= 0 ? 'positive' : 'negative';
+            const bestCls = m.best_day_pct >= 0 ? 'positive' : 'negative';
+            const worstCls = m.worst_day_pct >= 0 ? 'positive' : 'negative';
+            host.innerHTML = `
+                <div class="returns-metric">
+                    <div class="returns-metric-label">Cumulative</div>
+                    <div class="returns-metric-value ${cumCls}">${fmtSignedPct(m.cumulative_pct)}</div>
+                    <div class="returns-metric-sub">${m.n_days}일 누적</div>
+                </div>
+                <div class="returns-metric">
+                    <div class="returns-metric-label">Max Drawdown</div>
+                    <div class="returns-metric-value negative">${fmtSignedPct(m.mdd_pct)}</div>
+                    <div class="returns-metric-sub">peak→trough</div>
+                </div>
+                <div class="returns-metric">
+                    <div class="returns-metric-label">Best Day</div>
+                    <div class="returns-metric-value ${bestCls}">${fmtSignedPct(m.best_day_pct)}</div>
+                    <div class="returns-metric-sub">단일일 최대</div>
+                </div>
+                <div class="returns-metric">
+                    <div class="returns-metric-label">Worst Day</div>
+                    <div class="returns-metric-value ${worstCls}">${fmtSignedPct(m.worst_day_pct)}</div>
+                    <div class="returns-metric-sub">단일일 최악</div>
+                </div>
+                <div class="returns-metric">
+                    <div class="returns-metric-label">Win Rate</div>
+                    <div class="returns-metric-value">${m.win_rate.toFixed(1)}%</div>
+                    <div class="returns-metric-sub">${m.n_up}승 / ${m.n_down}패</div>
+                </div>
+                <div class="returns-metric">
+                    <div class="returns-metric-label">Sharpe (ann.)</div>
+                    <div class="returns-metric-value">${m.sharpe.toFixed(2)}</div>
+                    <div class="returns-metric-sub">일일 σ × √252</div>
+                </div>
+                <div class="returns-metric">
+                    <div class="returns-metric-label">Regime</div>
+                    <div class="returns-metric-value">${regimeChipHtml(regimeNow)}</div>
+                    <div class="returns-metric-sub">현재 시장 국면</div>
+                </div>
+            `;
+        }
 
         async function refreshReturns() {
             try {
@@ -974,10 +1080,13 @@
                 if (!d.ok || !d.dates.length) {
                     document.getElementById('returnsChart').style.display = 'none';
                     document.getElementById('returns-empty').style.display = 'block';
+                    renderReturnsMetrics(null, null);
                     return;
                 }
                 document.getElementById('returnsChart').style.display = '';
                 document.getElementById('returns-empty').style.display = 'none';
+
+                renderReturnsMetrics(d.metrics || {}, (d.metrics && d.metrics.current_regime) || null);
 
                 const labels = d.dates.map(s => s.slice(2));  // YY-MM-DD
                 const data = d.cumulative_return;
@@ -1036,6 +1145,51 @@
                         }
                     }
                 });
+
+                // ── Daily PnL bar chart ──
+                const dailyData = (d.daily_change_pct || []).slice();
+                const dailyLabels = labels.slice();
+                // 첫 날 0% 는 시드 평가 차이라 제거 (잡음 방지)
+                if (dailyData.length > 1) {
+                    dailyData.shift(); dailyLabels.shift();
+                }
+                const barColors = dailyData.map(v => v >= 0 ? 'rgba(63,185,80,0.85)' : 'rgba(248,81,73,0.85)');
+                const dctx = document.getElementById('dailyPnlChart').getContext('2d');
+                if (dailyPnlChartObj) dailyPnlChartObj.destroy();
+                dailyPnlChartObj = new Chart(dctx, {
+                    type: 'bar',
+                    data: {
+                        labels: dailyLabels,
+                        datasets: [{
+                            label: 'Daily P&L (%)',
+                            data: dailyData,
+                            backgroundColor: barColors,
+                            borderRadius: 2,
+                            barThickness: 'flex',
+                            maxBarThickness: 14,
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        plugins: {
+                            legend: { display: false },
+                            tooltip: {
+                                callbacks: {
+                                    label: function(ctx) {
+                                        return (ctx.parsed.y >= 0 ? '+' : '') + ctx.parsed.y.toFixed(2) + '%';
+                                    }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: { ticks: { color: '#484f58', maxTicksLimit: 12, font: { size: 10 } }, grid: { display: false } },
+                            y: {
+                                ticks: { color: '#484f58', callback: v => (v >= 0 ? '+' : '') + v + '%', font: { size: 10 } },
+                                grid: { color: '#21262d' }
+                            }
+                        }
+                    }
+                });
             } catch (e) {}
         }
 
@@ -1046,12 +1200,7 @@
         refreshPool();
         refreshSignals();
         refreshReturns();
-        setInterval(refresh, 30000);
-        setInterval(refreshPipeline, 30000);
-        setInterval(refreshScanSummary, 30000);
-        setInterval(refreshPool, 60000);      // 1분마다 갱신
-        setInterval(refreshSignals, 30000);
-        setInterval(refreshReturns, 300000);  // 5분마다 갱신
+        // Auto-refresh disabled — refresh only on page reload.
     </script>
 </body>
 </html>

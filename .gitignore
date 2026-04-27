@@ -1,5 +1,7 @@
 # Secrets
 config/.env
+config/.env.*
+config/.token_cache.json
 
 # Python
 __pycache__/
@@ -12,6 +14,25 @@ venv/
 # Models
 models/*.pkl
 models/*.pt
+
+# Runtime data
+data/
+logs/
+*.log
+
+# Generated reports / command outputs
+reports/backtest_comparison_*.csv
+reports/llm_filter_*.md
+reports/llm_ic_*.csv
+account_status.txt
+retrain_*.txt
+validation_result.txt
+run_dt_rl_backtest.py
+
+# Local agent/tool state
+.codex
+.claude/scheduled_tasks.lock
+.claude/worktrees/
 
 # IDE
 .vscode/

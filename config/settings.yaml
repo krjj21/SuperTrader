@@ -90,7 +90,7 @@ timing:
     epochs_per_update: 4
     episodes: 200
     hidden_dim: 256
-    buy_action_threshold: 0.07
+    buy_action_threshold: 0.05
     sell_action_threshold: 0.06
     # SAPPO: reward += lambda × sentiment(code, date). 0 = 기본 PPO
     sentiment_lambda: 0.0
@@ -98,7 +98,15 @@ timing:
     # Hybrid: XGB SELL 신뢰도 이 임계값 이상일 때만 RL 보류 무시 매도
     xgb_sell_confidence_threshold: 0.60
 
-# ── 전략 파라미터 ──
+# ── Regime Detector (시장 국면) ──
+# Phase 1+2: 라벨링 + 팩터/포지션 사이즈 모듈레이션. RL state 통합은 별도 라운드.
+regime:
+  enabled: true            # false = 매일 라벨만 기록, 매매 영향 0
+  lambda: 0.0              # 0=영향 없음 (dark-launch), 1=풀 적용
+  hmm_lookback_days: 60    # KOSPI 과거 N일 (return + rolling vol) 입력
+  hmm_n_states: 3          # 3-state classification
+  llm_override_threshold: 0.3   # |LLM score| > 임계 시 HMM 결과 강등/승격
+  news_fetch_enabled: true
 strategy:
   name: "factor_hybrid"
   params:

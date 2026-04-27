@@ -37,6 +37,7 @@ def build_stock_pool(
     previous_pool: StockPool | None = None,
     ohlcv_dict: dict[str, pd.DataFrame] | None = None,
     return_factors: bool = False,
+    regime_label: str | None = None,
 ) -> StockPool | tuple[StockPool, pd.DataFrame]:
     """주어진 날짜의 종목풀을 구성합니다.
 
@@ -47,11 +48,14 @@ def build_stock_pool(
         factor_report: 사전 계산된 팩터 리포트
         previous_pool: 이전 종목풀 (진입/퇴출 추적용)
         ohlcv_dict: 사전 로드된 OHLCV 데이터 (백테스트용, None이면 자동 로드)
+        regime_label: regime 라벨 (예: "risk_on_trend"). 지정 시 카테고리별
+            multiplier 가 IC 가중치 위에 곱해진다. config.regime.lambda_ <= 0
+            이면 라벨이 와도 무시 (dark-launch).
     """
     config = get_config()
 
-    # 1. 유니버스 구성
-    universe = get_universe(date)
+    # 1. 유니버스 구성 (PIT — ohlcv_dict 전달 시 D 시점 rolling-20 거래량 사용)
+    universe = get_universe(date, ohlcv_dict=ohlcv_dict)
     if universe.empty:
         logger.warning(f"유니버스가 비어 있습니다: {date}")
         return StockPool(date=date, codes=[])
@@ -96,10 +100,21 @@ def build_stock_pool(
         # 팩터 리포트 없으면 모든 팩터 사용
         valid_factors = factor_df.columns.tolist()
 
-    # 5. 복합 점수 계산
+    # 5. 복합 점수 계산 (regime 모드면 카테고리 multiplier 주입)
+    category_weights: dict[str, float] | None = None
+    if regime_label and getattr(config, "regime", None):
+        if config.regime.enabled and config.regime.lambda_ > 0:
+            from src.regime.weights import get_category_weights
+            base = get_category_weights(regime_label)
+            if base:
+                lam = config.regime.lambda_
+                # lambda 보간: 1 → 풀 적용, 0 → 1.0 (영향 없음)
+                category_weights = {k: 1.0 + lam * (v - 1.0) for k, v in base.items()}
+
     composite = compute_composite_score(
         factor_df, valid_factors, factor_report,
         method=config.factors.composite_method,
+        category_weights=category_weights,
     )
 
     # 6. 상위 N종목 선정
@@ -121,10 +136,11 @@ def build_stock_pool(
         exited=exited,
     )
 
+    regime_note = f" regime={regime_label}" if regime_label and category_weights else ""
     logger.info(
         f"종목풀 구성: {len(top_codes)}종목 "
         f"(신규 {len(entered)}, 퇴출 {len(exited)}) "
-        f"date={date}"
+        f"date={date}{regime_note}"
     )
     if return_factors:
         return pool, factor_df

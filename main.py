@@ -49,27 +49,36 @@ def run_backtest(only_strategies: list[str] | None = None, review: bool = False,
     start = config.backtest.start_date.replace("-", "")
     end = config.backtest.end_date.replace("-", "")
 
-    # 1. 유니버스 구성
-    logger.info("Step 1: 유니버스 구성")
-    universe = get_universe()
-    if universe.empty:
-        logger.error("유니버스가 비어 있습니다")
-        return
-    codes = universe["code"].tolist()
-    logger.info(f"유니버스: {len(codes)}종목")
+    # 1. 리밸런싱 스케줄 생성 (PIT 유니버스 시드용으로 먼저 계산)
+    logger.info("Step 1: 리밸런싱 스케줄 생성")
+    rebalance_dates = _generate_rebalance_dates(start, end, config.factors.rebalance_freq)
+    logger.info(f"리밸런싱 날짜: {len(rebalance_dates)}회")
 
-    # 2. OHLCV 데이터 로드
-    logger.info("Step 2: OHLCV 데이터 로드")
+    # 2. 유니버스 구성 — 모든 리밸런싱 날짜의 PIT 멤버십 union
+    #    (폐지 종목 포함 — universe_meta.csv 가 있으면 자동, 없으면 legacy 단일 호출)
+    logger.info("Step 2: 유니버스 구성 (PIT)")
+    all_codes: set[str] = set()
+    for d in rebalance_dates:
+        u = get_universe(d.replace("-", ""))
+        if not u.empty:
+            all_codes.update(u["code"].tolist())
+    if not all_codes:
+        # meta 부재 + legacy 도 실패한 비정상 케이스
+        legacy = get_universe()
+        if legacy.empty:
+            logger.error("유니버스가 비어 있습니다")
+            return
+        all_codes = set(legacy["code"].tolist())
+    codes = sorted(all_codes)
+    logger.info(f"유니버스: {len(codes)}종목 (rebalance union)")
+
+    # 3. OHLCV 데이터 로드
+    logger.info("Step 3: OHLCV 데이터 로드")
     ohlcv_dict = get_ohlcv_batch(codes, start, end)
     logger.info(f"OHLCV 로드: {len(ohlcv_dict)}종목")
 
-    # 2-1. IPO 이후 상장 종목 제외 (부분적 생존자 편향 완화)
+    # 3-1. IPO 이후 상장 종목 제외 (PIT meta 가 있으면 사실상 no-op)
     ohlcv_dict = filter_by_listing_date(ohlcv_dict, start)
-
-    # 3. 리밸런싱 날짜 생성 (월초)
-    logger.info("Step 3: 리밸런싱 스케줄 생성")
-    rebalance_dates = _generate_rebalance_dates(start, end, config.factors.rebalance_freq)
-    logger.info(f"리밸런싱 날짜: {len(rebalance_dates)}회")
 
     # 4. 종목풀 히스토리 구축 (팩터 파이프라인 — 라이브 매매와 동일)
     logger.info("Step 4: 종목풀 히스토리 구축 (팩터 기반)")
@@ -404,6 +413,24 @@ def run_live():
     _stock_names: dict[str, str] = {}  # 종목코드 → 종목명 캐시
     validator = None
 
+    # ── Regime Detector 컨테이너 (label 문자열 또는 None) ──
+    _current_regime: list[str | None] = [None]
+    if config.regime.enabled:
+        try:
+            from src.db.sappo_models import init_sappo_db, get_latest_regime
+            init_sappo_db(config.database.path)
+            prev = get_latest_regime()
+            if prev is not None:
+                _current_regime[0] = prev.label
+                logger.info(
+                    f"[REGIME] 이전 regime 복원: label={prev.label} date={prev.date} "
+                    f"(lambda={config.regime.lambda_})"
+                )
+            else:
+                logger.info("[REGIME] 이전 라벨 없음 — 첫 detect_regime_daily 까지 영향 없음")
+        except Exception as e:
+            logger.warning(f"[REGIME] 시작 시 regime 복원 실패: {e}")
+
     def sync_runtime_status() -> None:
         pool = _current_pool[0]
         save_runtime_status(
@@ -420,7 +447,10 @@ def run_live():
         """팩터 기반 종목풀을 리밸런싱합니다."""
         today = datetime.now().strftime("%Y%m%d")
         try:
-            pool = build_stock_pool(today, previous_pool=_current_pool[0])
+            pool = build_stock_pool(
+                today, previous_pool=_current_pool[0],
+                regime_label=_current_regime[0],
+            )
             if pool.codes:
                 strategy.update_pool(pool.codes)
                 _current_pool[0] = pool
@@ -680,6 +710,7 @@ def run_live():
                         qty = risk_mgr.calculate_position_size(
                             signal, balance.total_deposit,
                             balance.total_eval, len(balance.positions),
+                            regime_label=_current_regime[0],
                         )
                         if qty > 0:
                             valid, reason = risk_mgr.validate_order(signal, qty, balance)
@@ -881,46 +912,140 @@ def run_live():
     )
 
     # ── SAPPO 파이프라인: 일일 뉴스/sentiment + 주간 리포트 ──
-    def daily_sappo_fetch():
-        """매일 장 마감 직후 뉴스/sentiment 수집."""
-        import subprocess
-        logger.info("[SAPPO] 일일 뉴스/sentiment 수집 시작")
+    import subprocess
+
+    def _run_sappo_script(script_args: list[str], tag: str, timeout: int) -> None:
+        logger.info(f"[{tag}] 실행 시작: {' '.join(script_args)}")
         try:
-            subprocess.run(
-                [sys.executable, "scripts/fetch_daily_news.py"],
+            result = subprocess.run(
+                [sys.executable, *script_args],
                 check=False,
+                timeout=timeout,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
             )
+            logger.info(f"[{tag}] 완료 rc={result.returncode}")
+            if result.stdout:
+                logger.debug(f"[{tag} stdout] {result.stdout[-500:]}")
+            if result.returncode != 0 and result.stderr:
+                logger.warning(f"[{tag} stderr] {result.stderr[-500:]}")
+        except subprocess.TimeoutExpired:
+            logger.error(f"[{tag}] {timeout}초 초과 — 강제 종료됨")
         except FileNotFoundError:
-            logger.warning("[SAPPO] fetch_daily_news.py 없음 — 건너뜀")
+            logger.warning(f"[{tag}] 스크립트 없음 — 건너뜀")
         except Exception as e:
-            logger.warning(f"[SAPPO] 일일 수집 실패: {e}")
+            logger.warning(f"[{tag}] 실행 실패: {e}")
+
+    def daily_sappo_fetch():
+        _run_sappo_script(["scripts/fetch_daily_news.py"], "SAPPO", timeout=900)
+
+    def daily_market_news_fetch():
+        if not config.regime.news_fetch_enabled:
+            logger.debug("[REGIME] news_fetch_enabled=False — 시장 뉴스 수집 skip")
+            return
+        _run_sappo_script(["scripts/fetch_market_news.py"], "REGIME news", timeout=600)
+
+    def detect_regime_daily():
+        if not config.regime.enabled:
+            logger.debug("[REGIME] enabled=False — detect skip")
+            return
+        try:
+            from src.regime.detector import RegimeDetector
+            from src.db.sappo_models import upsert_regime_label
+            today = datetime.now().strftime("%Y%m%d")
+            result = RegimeDetector().detect_today(today)
+            upsert_regime_label(
+                date=today,
+                label=result.label,
+                hmm_state=result.hmm_state,
+                hmm_probs=result.hmm_probs_tuple,
+                kospi_return_60d=result.kospi_return_60d,
+                kospi_vol_60d=result.kospi_vol_60d,
+                llm_score=result.llm_score,
+                overridden_by_llm=result.overridden_by_llm,
+                notes=result.notes,
+            )
+            prev_label = _current_regime[0]
+            _current_regime[0] = result.label
+            try:
+                changed_msg = (
+                    f" (이전: {prev_label})" if prev_label and prev_label != result.label else ""
+                )
+                lam_note = (
+                    f" λ={config.regime.lambda_}" if config.regime.lambda_ > 0 else " (dark-launch λ=0)"
+                )
+                notifier.notify_info(
+                    f"[REGIME] {today} → *{result.label}*{changed_msg}\n"
+                    f"posts={ {k: round(v,2) for k,v in result.hmm_probs.items()} } "
+                    f"ret60d={result.kospi_return_60d:+.3f} vol60d={result.kospi_vol_60d:.3f} "
+                    f"llm={result.llm_score} override={result.overridden_by_llm}{lam_note}"
+                )
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"[REGIME] detect_regime_daily 실패: {e}")
+            try:
+                notifier.notify_error(str(e), "Regime detect")
+            except Exception:
+                pass
 
     def weekly_sappo_report():
-        """매주 토요일 SAPPO 검증 리포트 Slack 전송."""
-        import subprocess
-        logger.info("[SAPPO] 주간 검증 리포트 생성")
-        try:
-            subprocess.run(
-                [sys.executable, "scripts/weekly_sappo_report.py", "--slack"],
-                check=False,
-            )
-        except FileNotFoundError:
-            logger.warning("[SAPPO] weekly_sappo_report.py 없음 — 건너뜀")
-        except Exception as e:
-            logger.warning(f"[SAPPO] 주간 리포트 실패: {e}")
+        _run_sappo_script(
+            ["scripts/weekly_sappo_report.py", "--slack"], "SAPPO 주간", timeout=600
+        )
 
     # 일일 SAPPO 수집 — post_market 이후 (16:00)
     scheduler.add_job(
         daily_sappo_fetch, "cron",
         hour=16, minute=0,
     )
+    # ── Regime Detector — 매일 장 시작 전 (08:30 시장 뉴스, 08:45 detect) ──
+    if config.regime.enabled:
+        scheduler.add_job(
+            daily_market_news_fetch, "cron",
+            hour=8, minute=30, id="regime_news_fetch",
+        )
+        scheduler.add_job(
+            detect_regime_daily, "cron",
+            hour=8, minute=45, id="regime_detect",
+        )
+        logger.info("[REGIME] 스케줄 등록: 시장 뉴스 08:30, regime detect 08:45")
     # 주간 SAPPO 리포트 — 매주 토요일 오전 (weekly_retrain 직후 07:00)
     scheduler.add_job(
         weekly_sappo_report, "cron",
         day_of_week="sat", hour=7, minute=0,
     )
 
-    logger.info(f"스케줄 시작: {config.schedule.check_interval_sec}초 간격, 리밸런싱 매월 {config.schedule.rebalance_day}일, 재학습 매주 토요일, SAPPO 수집 매일 16:00, SAPPO 리포트 매주 토요일 07:00")
+    scheduler.add_job(
+        lambda: logger.info("[HEARTBEAT] scheduler alive"),
+        "interval", minutes=5, id="heartbeat",
+    )
+
+    from apscheduler.events import (
+        EVENT_JOB_ERROR, EVENT_JOB_MISSED, EVENT_JOB_MAX_INSTANCES,
+    )
+
+    _EVENT_META = {
+        EVENT_JOB_ERROR: ("error", "잡 실행 실패", "scheduler job"),
+        EVENT_JOB_MISSED: ("warning", "잡 실행 누락 (스케줄 시간 경과)", "scheduler miss"),
+        EVENT_JOB_MAX_INSTANCES: ("warning", "잡 최대 동시 실행 초과 (이전 실행 미완료)", "scheduler max_instances"),
+    }
+
+    def _scheduler_event_listener(event):
+        level, desc, ctx = _EVENT_META.get(event.code, ("warning", "알 수 없는 이벤트", "scheduler"))
+        job_id = getattr(event, "job_id", "?")
+        exc = getattr(event, "exception", None)
+        msg = f"{desc}: {job_id}" + (f" — {exc}" if exc else "")
+        getattr(logger, level)(f"[SCHEDULER] {msg}")
+        notifier.notify_error(str(exc) if exc else msg, f"{ctx}: {job_id}")
+
+    scheduler.add_listener(
+        _scheduler_event_listener,
+        EVENT_JOB_ERROR | EVENT_JOB_MISSED | EVENT_JOB_MAX_INSTANCES,
+    )
+
+    logger.info(f"스케줄 시작: {config.schedule.check_interval_sec}초 간격, 리밸런싱 매월 {config.schedule.rebalance_day}일, 재학습 매주 토요일, SAPPO 수집 매일 16:00, SAPPO 리포트 매주 토요일 07:00, heartbeat 5분")
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):

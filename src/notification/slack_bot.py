@@ -61,6 +61,10 @@ class SlackNotifier:
     # ──────────────────────────────────────────
     # 매매 알림
     # ──────────────────────────────────────────
+    def notify_info(self, text: str) -> bool:
+        """시스템 채널에 일반 정보 메시지 전송 (regime 변경 등)."""
+        return self._send(text, channel=self.channel)
+
     def notify_signal(self, signal: TradeSignal) -> bool:
         """매매 시그널 발생 알림"""
         if signal.signal == Signal.HOLD:

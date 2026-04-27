@@ -45,10 +45,25 @@ def _load_current_pool() -> list[tuple[str, str]]:
     return [(s["code"], s.get("name", "")) for s in stocks]
 
 
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+_NAME_LOOKUP_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+
+
 def _resolve_name(code: str) -> str:
     try:
         from pykrx import stock as krx
-        return krx.get_market_ticker_name(code) or ""
+    except Exception:
+        return ""
+
+    fut = _NAME_LOOKUP_EXECUTOR.submit(
+        lambda: krx.get_market_ticker_name(code) or ""
+    )
+    try:
+        return fut.result(timeout=5.0)
+    except FuturesTimeout:
+        logger.warning(f"pykrx 종목명 조회 timeout: {code}")
+        return ""
     except Exception:
         return ""
 

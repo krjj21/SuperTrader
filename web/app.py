@@ -389,7 +389,19 @@ def api_feedback():
 
 @app.route("/api/returns")
 def api_returns():
-    """일일 수익률 시계열 API — DailyPnL 테이블에서 조회"""
+    """일일 수익률 시계열 API — DailyPnL + RegimeLabel 조합
+
+    응답:
+        dates, total_eval, total_pnl_pct, cumulative_return  (기존)
+        daily_change_pct  : 전일 대비 일일 평가금액 변화율 (%)
+        regime_labels     : 일자별 regime 라벨 (없으면 null)
+        metrics           : {
+            cumulative_pct, mdd_pct, best_day_pct, worst_day_pct,
+            win_rate, n_days, n_up, n_down, sharpe, current_regime
+        }
+    """
+    import math
+
     try:
         from src.db.models import init_db, get_session, DailyPnL
 
@@ -399,23 +411,114 @@ def api_returns():
         session.close()
 
         if not rows:
-            return jsonify({"ok": True, "dates": [], "total_eval": [], "total_pnl_pct": []})
+            return jsonify({
+                "ok": True, "dates": [], "total_eval": [], "total_pnl_pct": [],
+                "cumulative_return": [], "daily_change_pct": [], "regime_labels": [],
+                "metrics": {},
+            })
 
         initial_eval = rows[0].total_eval - rows[0].total_pnl if rows[0].total_eval else 10_000_000
         if initial_eval <= 0:
             initial_eval = 10_000_000
 
-        dates = []
-        total_eval = []
-        total_pnl_pct = []
-        cumulative_return = []
+        # ── Regime 라벨 lookup (date YYYYMMDD → label) ──
+        regime_map: dict[str, str] = {}
+        try:
+            from src.db.sappo_models import init_sappo_db, get_sappo_session, RegimeLabel
+            init_sappo_db()
+            sess = get_sappo_session()
+            try:
+                start_d = rows[0].date
+                end_d = rows[-1].date
+                regime_rows = (
+                    sess.query(RegimeLabel)
+                    .filter(RegimeLabel.date >= start_d, RegimeLabel.date <= end_d)
+                    .all()
+                )
+                regime_map = {r.date: r.label for r in regime_rows}
+            finally:
+                sess.close()
+        except Exception:
+            pass
 
+        # ── 시계열 구축 ──
+        dates: list[str] = []
+        dates_raw: list[str] = []
+        total_eval: list[int] = []
+        total_pnl_pct: list[float] = []
+        cumulative_return: list[float] = []
+        daily_change_pct: list[float] = []
+        regime_labels: list[str | None] = []
+
+        prev_eval = initial_eval
         for r in rows:
-            dates.append(f"{r.date[:4]}-{r.date[4:6]}-{r.date[6:]}" if len(r.date) == 8 else r.date)
-            total_eval.append(r.total_eval)
+            d_iso = f"{r.date[:4]}-{r.date[4:6]}-{r.date[6:]}" if len(r.date) == 8 else r.date
+            dates.append(d_iso)
+            dates_raw.append(r.date)
+            total_eval.append(int(r.total_eval) if r.total_eval else 0)
             total_pnl_pct.append(round(r.total_pnl_pct, 2))
-            cum_ret = round((r.total_eval / initial_eval - 1) * 100, 2) if r.total_eval else 0
-            cumulative_return.append(cum_ret)
+
+            cum_ret = (r.total_eval / initial_eval - 1) * 100 if r.total_eval else 0.0
+            cumulative_return.append(round(cum_ret, 2))
+
+            if prev_eval and prev_eval > 0 and r.total_eval:
+                day_chg = (r.total_eval / prev_eval - 1) * 100
+            else:
+                day_chg = 0.0
+            daily_change_pct.append(round(day_chg, 2))
+
+            regime_labels.append(regime_map.get(r.date))
+            prev_eval = r.total_eval if r.total_eval else prev_eval
+
+        # ── 메트릭 ──
+        cum_now = cumulative_return[-1]
+
+        # MDD: peak-to-trough on total_eval
+        peak = total_eval[0] if total_eval[0] else initial_eval
+        mdd_pct = 0.0
+        for v in total_eval:
+            if v <= 0:
+                continue
+            if v > peak:
+                peak = v
+            dd = (v / peak - 1) * 100 if peak > 0 else 0.0
+            if dd < mdd_pct:
+                mdd_pct = dd
+
+        # 일일 변동 통계 (initial day 의 0% 는 의미 없으므로 1번째부터)
+        daily_changes_eff = daily_change_pct[1:] if len(daily_change_pct) > 1 else []
+        if daily_changes_eff:
+            best_day = max(daily_changes_eff)
+            worst_day = min(daily_changes_eff)
+            n_up = sum(1 for x in daily_changes_eff if x > 0)
+            n_down = sum(1 for x in daily_changes_eff if x < 0)
+            denom = n_up + n_down
+            win_rate = (n_up / denom * 100) if denom > 0 else 0.0
+            mu = sum(daily_changes_eff) / len(daily_changes_eff)
+            var = sum((x - mu) ** 2 for x in daily_changes_eff) / max(len(daily_changes_eff) - 1, 1)
+            std = math.sqrt(var)
+            # 일일 sharpe (연환산: × √252). risk-free=0 가정
+            sharpe = (mu / std * math.sqrt(252)) if std > 0 else 0.0
+        else:
+            best_day = worst_day = 0.0
+            n_up = n_down = 0
+            win_rate = 0.0
+            sharpe = 0.0
+
+        current_regime = regime_labels[-1] if regime_labels else None
+
+        metrics = {
+            "cumulative_pct": round(cum_now, 2),
+            "mdd_pct": round(mdd_pct, 2),
+            "best_day_pct": round(best_day, 2),
+            "worst_day_pct": round(worst_day, 2),
+            "win_rate": round(win_rate, 1),
+            "n_days": len(rows),
+            "n_up": n_up,
+            "n_down": n_down,
+            "sharpe": round(sharpe, 2),
+            "current_regime": current_regime,
+        }
 
         return jsonify({
             "ok": True,
@@ -423,6 +526,9 @@ def api_returns():
             "total_eval": total_eval,
             "total_pnl_pct": total_pnl_pct,
             "cumulative_return": cumulative_return,
+            "daily_change_pct": daily_change_pct,
+            "regime_labels": regime_labels,
+            "metrics": metrics,
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -597,5 +703,68 @@ def api_training():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _start_memory_cleanup_thread(
+    interval_sec: int = 1800,
+    name_cache_max: int = 1000,
+) -> None:
+    import gc
+    import os
+    import threading
+    import time
+
+    pid = os.getpid()
+
+    def _get_rss_mb() -> float:
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            counters = PROCESS_MEMORY_COUNTERS()
+            counters.cb = ctypes.sizeof(counters)
+            handle = ctypes.windll.kernel32.GetCurrentProcess()
+            if ctypes.windll.psapi.GetProcessMemoryInfo(
+                handle, ctypes.byref(counters), counters.cb
+            ):
+                return counters.WorkingSetSize / (1024 * 1024)
+        except Exception:
+            pass
+        return 0.0
+
+    def _loop():
+        while True:
+            time.sleep(interval_sec)
+            rss_before = _get_rss_mb()
+            if len(_stock_name_cache) > name_cache_max:
+                _stock_name_cache.clear()
+            _balance_cache.clear()
+            collected = gc.collect()
+            rss_after = _get_rss_mb()
+            print(
+                f"[CLEANUP] pid={pid} gc={collected} "
+                f"rss={rss_before:.0f}MB→{rss_after:.0f}MB "
+                f"(saved {rss_before - rss_after:.0f}MB) "
+                f"name_cache={len(_stock_name_cache)}",
+                flush=True,
+            )
+
+    t = threading.Thread(target=_loop, daemon=True, name="memory_cleanup")
+    t.start()
+
+
 if __name__ == "__main__":
+    _start_memory_cleanup_thread()
     app.run(host="0.0.0.0", port=5000, debug=False)

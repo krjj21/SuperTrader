@@ -19,6 +19,15 @@ from loguru import logger
 from src.config import get_config
 
 CACHE_DIR = Path("data/pool_cache")
+UNIVERSE_META_PATH = Path("data/universe_meta.csv")
+
+
+def _meta_signature() -> str:
+    if not UNIVERSE_META_PATH.exists():
+        return "no-meta"
+    st = UNIVERSE_META_PATH.stat()
+    raw = f"{int(st.st_mtime)}:{st.st_size}".encode()
+    return hashlib.sha1(raw).hexdigest()[:12]
 
 
 def _payload() -> dict:
@@ -38,6 +47,8 @@ def _payload() -> dict:
         "min_market_cap": cfg.universe.min_market_cap,
         "min_avg_volume": cfg.universe.min_avg_volume,
         "exclude_sectors": cfg.universe.exclude_sectors,
+        "pit_universe": True,
+        "meta_signature": _meta_signature(),
     }
 
 

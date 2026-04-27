@@ -115,6 +115,7 @@ class RiskManager:
         available_cash: int,
         total_assets: int,
         current_positions: int,
+        regime_label: str | None = None,
     ) -> int:
         """포지션 사이즈(수량)를 계산합니다.
 
@@ -123,6 +124,8 @@ class RiskManager:
             available_cash: 주문 가능 예수금
             total_assets: 총 평가금액
             current_positions: 현재 보유 종목 수
+            regime_label: 현재 시장 regime ("risk_on_trend"/"high_vol_risk_off"/"mean_revert").
+                config.regime.enabled=True AND lambda_>0 일 때만 사이즈에 multiplier 적용.
 
         Returns:
             매수 수량 (0이면 매수 불가)
@@ -161,14 +164,26 @@ class RiskManager:
         else:
             quantity = invest_amount // signal.price
 
+        # ── Regime 사이즈 모듈레이션 ──
+        regime_mult = 1.0
+        if regime_label:
+            cfg = get_config()
+            if getattr(cfg, "regime", None) and cfg.regime.enabled and cfg.regime.lambda_ > 0:
+                from src.regime.weights import get_position_multiplier
+                base_mult = get_position_multiplier(regime_label)
+                # lambda 보간: 1 → 풀 적용, 0 → 1.0 (영향 없음)
+                regime_mult = 1.0 + cfg.regime.lambda_ * (base_mult - 1.0)
+                quantity = int(quantity * regime_mult)
+
         # 최소 1주
         quantity = max(quantity, 0)
 
         if quantity > 0:
+            extra = f" regime={regime_label} ×{regime_mult:.2f}" if regime_mult != 1.0 else ""
             logger.info(
                 f"포지션 사이즈 계산: {signal.stock_code} "
                 f"{quantity}주 × {signal.price:,}원 = {quantity * signal.price:,}원 "
-                f"(한도: {max_amount:,}원)"
+                f"(한도: {max_amount:,}원){extra}"
             )
 
         return quantity

@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import (
-    Column, Integer, Float, String, Text, DateTime,
+    Column, Integer, Float, String, Text, DateTime, Boolean,
     create_engine, event, UniqueConstraint, Index,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -145,6 +145,29 @@ class SappoWeeklyMetric(SappoBase):
     n_training_runs = Column(Integer, default=0)
     notes = Column(Text, default="")
     created_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+
+# ══════════════════════════════════════════════════════════════
+# 6. Regime 라벨 (시장 국면)
+# ══════════════════════════════════════════════════════════════
+class RegimeLabel(SappoBase):
+    """매일 장 시작 전 산출되는 시장 국면 라벨.
+    label ∈ {risk_on_trend, high_vol_risk_off, mean_revert}
+    """
+    __tablename__ = "sappo_regime_labels"
+
+    date = Column(String(8), primary_key=True)             # YYYYMMDD
+    label = Column(String(20), nullable=False)
+    hmm_state = Column(Integer, default=-1)                # GMM cluster idx (사후 라벨링 전)
+    hmm_prob_risk_on = Column(Float, default=0.0)
+    hmm_prob_risk_off = Column(Float, default=0.0)
+    hmm_prob_revert = Column(Float, default=0.0)
+    kospi_return_60d = Column(Float, default=0.0)          # 60일 누적 log-return
+    kospi_vol_60d = Column(Float, default=0.0)             # 60일 일수익률 std (annualized)
+    llm_score = Column(Float, nullable=True)               # 시장 뉴스 sentiment, -1~+1
+    overridden_by_llm = Column(Boolean, default=False)     # LLM이 HMM 결과 강등/승격했는지
+    notes = Column(Text, default="")
+    generated_at = Column(DateTime, default=datetime.now)
 
 
 # ══════════════════════════════════════════════════════════════
@@ -349,6 +372,71 @@ def save_ic_metric(
         session.commit()
         session.refresh(rec)
         return rec
+    finally:
+        session.close()
+
+
+def upsert_regime_label(
+    date: str,
+    label: str,
+    hmm_state: int,
+    hmm_probs: tuple[float, float, float],
+    kospi_return_60d: float,
+    kospi_vol_60d: float,
+    llm_score: float | None = None,
+    overridden_by_llm: bool = False,
+    notes: str = "",
+) -> RegimeLabel:
+    """오늘자 regime 라벨 upsert. hmm_probs 는 (risk_on, risk_off, revert) 순."""
+    p_on, p_off, p_rev = hmm_probs
+    session = get_sappo_session()
+    try:
+        existing = session.query(RegimeLabel).filter_by(date=date).first()
+        if existing:
+            existing.label = label
+            existing.hmm_state = hmm_state
+            existing.hmm_prob_risk_on = p_on
+            existing.hmm_prob_risk_off = p_off
+            existing.hmm_prob_revert = p_rev
+            existing.kospi_return_60d = kospi_return_60d
+            existing.kospi_vol_60d = kospi_vol_60d
+            existing.llm_score = llm_score
+            existing.overridden_by_llm = overridden_by_llm
+            existing.notes = notes
+            existing.generated_at = datetime.now()
+            session.commit()
+            return existing
+        rec = RegimeLabel(
+            date=date, label=label, hmm_state=hmm_state,
+            hmm_prob_risk_on=p_on, hmm_prob_risk_off=p_off, hmm_prob_revert=p_rev,
+            kospi_return_60d=kospi_return_60d, kospi_vol_60d=kospi_vol_60d,
+            llm_score=llm_score, overridden_by_llm=overridden_by_llm, notes=notes,
+        )
+        session.add(rec)
+        session.commit()
+        session.refresh(rec)
+        return rec
+    finally:
+        session.close()
+
+
+def get_latest_regime() -> RegimeLabel | None:
+    """가장 최근 regime 라벨 1건. 없으면 None."""
+    session = get_sappo_session()
+    try:
+        return (
+            session.query(RegimeLabel)
+            .order_by(RegimeLabel.date.desc())
+            .first()
+        )
+    finally:
+        session.close()
+
+
+def get_regime_for(date: str) -> RegimeLabel | None:
+    session = get_sappo_session()
+    try:
+        return session.query(RegimeLabel).filter_by(date=date).first()
     finally:
         session.close()
 
