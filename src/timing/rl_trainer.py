@@ -7,6 +7,7 @@ PPO 학습 파이프라인
 """
 from __future__ import annotations
 
+import math
 import time
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -123,15 +124,27 @@ def evaluate_rl_agent(
     episode_returns = []
     episode_trades = []
 
+    # 최소 30일이면 PPO env 가 동작 (train 필터는 100일이지만 val split 후 짧아질 수 있음)
     args_list = [
         (code, df, cpu_agent,
          TradingEnv(commission_rate=commission_rate, tax_rate=tax_rate),
          True)
-        for code, df in ohlcv_dict.items() if len(df) >= 100
+        for code, df in ohlcv_dict.items() if len(df) >= 30
     ]
 
+    if not args_list:
+        logger.warning(
+            f"evaluate_rl_agent: 평가 가능한 종목 0개 (입력 {len(ohlcv_dict)}종목, 모두 <30일). "
+            f"평가를 건너뛰고 sharpe=-999 반환."
+        )
+        agent.actor.train()
+        return {
+            "sharpe": -999.0, "total_return": 0.0, "max_drawdown": 0.0,
+            "n_episodes": 0, "win_rate": 0.0, "avg_trades": 0.0,
+        }
+
     import os
-    n_workers = min(os.cpu_count() or 4, len(args_list), 8)
+    n_workers = max(min(os.cpu_count() or 4, len(args_list), 8), 1)
     with ThreadPoolExecutor(max_workers=n_workers) as pool:
         results = pool.map(_collect_single_episode_worker, args_list)
 
@@ -158,6 +171,134 @@ def evaluate_rl_agent(
         "win_rate": float((returns > 0).sum() / len(returns) * 100),
         "avg_trades": float(np.mean(episode_trades)) if episode_trades else 0.0,
     }
+
+
+def evaluate_rl_portfolio(
+    agent: RLTimingModel,
+    ohlcv_dict: dict[str, pd.DataFrame],
+    top_n: int = 30,
+    rebalance_freq_days: int = 22,
+    commission_rate: float = 0.00015,
+    tax_rate: float = 0.0023,
+    initial_capital: int = 100_000_000,
+) -> dict:
+    """RL 에이전트를 *portfolio simulation* 환경에서 평가한다.
+
+    evaluate_rl_agent() 가 단일종목 episode 평균 Sharpe 를 계산하는 반면,
+    이 함수는 30종목 동시보유 + 월간 리밸런싱 + commission/tax 를 적용한
+    portfolio Sharpe 를 계산한다 (production backtest 와 동일 환경).
+
+    종목풀 선정: 각 리밸런싱 시점에서 직전 60일 누적 수익률 상위 top_n.
+    (간이 모멘텀 — 학습 평가용. 라이브의 220-팩터 IC 가중과는 별개.)
+
+    Returns:
+        {sharpe, total_return, max_drawdown, win_rate, total_trades,
+         n_rebalances, env_type='portfolio'}
+    """
+    # PortfolioBacktestEngine + FactorRLStrategy 재사용
+    try:
+        from backtest.portfolio_engine import PortfolioBacktestEngine
+        from src.strategy.factor_rl import FactorRLStrategy
+        import tempfile
+        import os
+    except Exception as e:
+        logger.warning(f"evaluate_rl_portfolio 의존성 로드 실패: {e}")
+        return {"sharpe": -999.0, "total_return": 0.0, "max_drawdown": 0.0,
+                "win_rate": 0.0, "total_trades": 0, "n_rebalances": 0,
+                "env_type": "portfolio", "error": str(e)}
+
+    # 1) 모든 종목·날짜 union 정렬
+    all_dates: set[str] = set()
+    for code, df in ohlcv_dict.items():
+        if "date" in df.columns:
+            all_dates.update(df["date"].astype(str))
+    sorted_dates = sorted(all_dates)
+    if len(sorted_dates) < 60 + rebalance_freq_days:
+        logger.warning(
+            f"evaluate_rl_portfolio: 데이터 부족 ({len(sorted_dates)}일 < "
+            f"{60 + rebalance_freq_days}일 필요)"
+        )
+        return {"sharpe": -999.0, "total_return": 0.0, "max_drawdown": 0.0,
+                "win_rate": 0.0, "total_trades": 0, "n_rebalances": 0,
+                "env_type": "portfolio"}
+
+    # 2) 리밸런싱 날짜: 60일 워밍업 후 rebalance_freq_days 간격
+    warmup = 60
+    rebalance_dates: list[str] = []
+    for i in range(warmup, len(sorted_dates), rebalance_freq_days):
+        rebalance_dates.append(sorted_dates[i])
+    if not rebalance_dates:
+        return {"sharpe": -999.0, "total_return": 0.0, "max_drawdown": 0.0,
+                "win_rate": 0.0, "total_trades": 0, "n_rebalances": 0,
+                "env_type": "portfolio"}
+
+    # 3) 각 리밸런싱일에서 직전 60일 누적 수익률 top_n 선정
+    pool_history: dict[str, list[str]] = {}
+    for rd in rebalance_dates:
+        scores: dict[str, float] = {}
+        for code, df in ohlcv_dict.items():
+            if "date" not in df.columns or len(df) < warmup:
+                continue
+            df_idx = df[df["date"].astype(str) <= rd].tail(warmup)
+            if len(df_idx) < warmup:
+                continue
+            close = df_idx["close"].astype(float).values
+            if close[0] <= 0:
+                continue
+            scores[code] = float(close[-1] / close[0] - 1.0)
+        if scores:
+            top = sorted(scores.items(), key=lambda x: x[1], reverse=True)[:top_n]
+            pool_history[rd] = [c for c, _ in top]
+
+    if not pool_history:
+        return {"sharpe": -999.0, "total_return": 0.0, "max_drawdown": 0.0,
+                "win_rate": 0.0, "total_trades": 0, "n_rebalances": 0,
+                "env_type": "portfolio"}
+
+    # 4) 임시 모델 파일로 저장 → FactorRLStrategy 가 load
+    tmp = tempfile.NamedTemporaryFile(suffix=".pt", delete=False)
+    tmp.close()
+    try:
+        agent.save(tmp.name)
+        # XGBoost는 dummy 경로 (FactorRLStrategy 단독 사용 시 ml_model_path 불필요)
+        strategy = FactorRLStrategy(rl_model_path=tmp.name)
+    except Exception as e:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
+        logger.warning(f"evaluate_rl_portfolio: FactorRLStrategy 로드 실패: {e}")
+        return {"sharpe": -999.0, "total_return": 0.0, "max_drawdown": 0.0,
+                "win_rate": 0.0, "total_trades": 0, "n_rebalances": 0,
+                "env_type": "portfolio", "error": str(e)}
+
+    try:
+        engine = PortfolioBacktestEngine(
+            initial_capital=initial_capital,
+            commission_rate=commission_rate,
+            tax_rate=tax_rate,
+        )
+        result = engine.run(strategy, ohlcv_dict, pool_history, rebalance_dates)
+        m = result.get("metrics", {}) if isinstance(result, dict) else {}
+        return {
+            "sharpe": float(m.get("sharpe_ratio", -999.0)),
+            "total_return": float(m.get("total_return", 0.0)),
+            "max_drawdown": float(m.get("max_drawdown", 0.0)),
+            "win_rate": float(m.get("win_rate", 0.0)),
+            "total_trades": int(m.get("total_trades", 0)),
+            "n_rebalances": len(rebalance_dates),
+            "env_type": "portfolio",
+        }
+    except Exception as e:
+        logger.warning(f"evaluate_rl_portfolio 실행 중 예외: {e}")
+        return {"sharpe": -999.0, "total_return": 0.0, "max_drawdown": 0.0,
+                "win_rate": 0.0, "total_trades": 0, "n_rebalances": 0,
+                "env_type": "portfolio", "error": str(e)}
+    finally:
+        try:
+            os.unlink(tmp.name)
+        except Exception:
+            pass
 
 
 def train_rl_model(
@@ -233,10 +374,15 @@ def train_rl_model(
     logger.info(f"미니배치 크기: {auto_mini_batch} (자동 설정)")
 
     codes = list(train_dict.keys())
-    best_sharpe = -999.0
+    best_score = -999.0          # trades-adjusted Sharpe (early stopping criterion)
     best_state_dict = None
     patience = 0
-    max_patience = 10  # early stopping
+    max_patience = 10  # early stopping (× 5 episode 주기 = 50 episode 무개선 시 종료)
+
+    # Portfolio gate (선택적): 매 portfolio_eval_every episode 마다 portfolio backtest 로 추가 검증
+    # 0 또는 None 이면 비활성. 기본 25 — 학습 100분 중 4-5회 호출, 추가 시간 ~5min ×5 = 25min
+    portfolio_eval_every = 25
+    best_portfolio_sharpe = -999.0   # 최고 portfolio sharpe 기록 (참고용)
 
     n_episodes = rl_config.episodes
     logger.info(f"PPO 학습 시작: {n_episodes} 에피소드 × {len(codes)} 종목")
@@ -308,6 +454,13 @@ def train_rl_model(
                 tax_rate=config.backtest.tax_rate,
             )
             val_sharpe = val_metrics["sharpe"]
+            avg_trades = val_metrics.get("avg_trades", 0.0) or 0.0
+
+            # Trades-adjusted score: 매매 빈도가 폭증하는 정책에 페널티
+            # score = sharpe / log(1 + trades_per_episode)
+            # → trades 5회 → 1.79 분모 / trades 25 → 3.26 / trades 100 → 4.61
+            # 같은 sharpe 면 trades 적은 정책이 우선
+            trades_adj_score = float(val_sharpe) / float(math.log(1.0 + max(avg_trades, 0.0)) + 1.0)
 
             elapsed = time.time() - train_start_time
             eta = elapsed / (episode + 1) * (n_episodes - episode - 1)
@@ -319,23 +472,51 @@ def train_rl_model(
                 f"entropy={stats['entropy']:.3f}, "
                 f"val_sharpe={val_sharpe:.3f}, "
                 f"val_return={val_metrics['total_return']:.2f}%, "
-                f"trades={val_metrics['avg_trades']:.1f}, "
+                f"trades={avg_trades:.1f}, "
+                f"adj_score={trades_adj_score:.3f}, "
                 f"batch={batch_size}, "
                 f"rollout={rollout_time:.1f}s, update={update_time:.1f}s, "
                 f"ETA={eta/60:.0f}min"
             )
 
-            if val_sharpe > best_sharpe:
-                best_sharpe = val_sharpe
+            # ── Portfolio gate (조건부): 비싸므로 25 episode 마다만 ──
+            if portfolio_eval_every and (episode + 1) % portfolio_eval_every == 0:
+                try:
+                    pf_metrics = evaluate_rl_portfolio(
+                        agent, val_dict,
+                        commission_rate=config.backtest.commission_rate,
+                        tax_rate=config.backtest.tax_rate,
+                    )
+                    pf_sharpe = pf_metrics.get("sharpe", -999.0)
+                    pf_mdd = pf_metrics.get("max_drawdown", 0.0)
+                    pf_trades = pf_metrics.get("total_trades", 0)
+                    if pf_sharpe > best_portfolio_sharpe:
+                        best_portfolio_sharpe = pf_sharpe
+                    logger.info(
+                        f"  [Portfolio] sharpe={pf_sharpe:.3f}, mdd={pf_mdd:.2f}%, "
+                        f"trades={pf_trades}, best_pf={best_portfolio_sharpe:.3f}"
+                    )
+                except Exception as e:
+                    logger.warning(f"  [Portfolio] eval 실패: {e}")
+
+            # ── Best 선택은 trades-adjusted score 기준 ──
+            if trades_adj_score > best_score:
+                best_score = trades_adj_score
                 best_state_dict = {
                     k: v.clone() for k, v in agent.actor.state_dict().items()
                 }
                 patience = 0
-                logger.info(f"  → Best Sharpe: {best_sharpe:.3f}")
+                logger.info(
+                    f"  → Best (adj_score={best_score:.3f}, "
+                    f"sharpe={val_sharpe:.3f}, trades={avg_trades:.1f})"
+                )
             else:
                 patience += 1
                 if patience >= max_patience:
-                    logger.info(f"  → Early stopping (patience={max_patience})")
+                    logger.info(
+                        f"  → Early stopping (patience={max_patience}, "
+                        f"best_adj_score={best_score:.3f})"
+                    )
                     break
 
     # 최적 모델 복원 및 저장

@@ -866,9 +866,9 @@ def run_live():
 
         logger.info(f"주간 모델 재학습 시작: {model_type}")
         try:
-            # 최신 OHLCV 데이터 수집 (최근 2년)
+            # 최신 OHLCV 데이터 수집 (최근 5년 — 약세장/regime shift 포함)
             end = datetime.now().strftime("%Y%m%d")
-            start = (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
+            start = (datetime.now() - timedelta(days=1825)).strftime("%Y%m%d")
             universe = get_universe()
             codes = universe["code"].tolist()[:100]
             ohlcv_dict = get_ohlcv_batch(codes, start, end)
@@ -1152,9 +1152,9 @@ def run_retrain(model_type: str):
     from src.data.market_data import get_universe, get_ohlcv_batch
     from src.timing.retrain import retrain_model
 
-    # 최근 2년 데이터
+    # 최근 5년 데이터 (약세장 포함, distribution shift 완화)
     end = datetime.now().strftime("%Y%m%d")
-    start = (datetime.now() - timedelta(days=730)).strftime("%Y%m%d")
+    start = (datetime.now() - timedelta(days=1825)).strftime("%Y%m%d")
 
     universe = get_universe()
     codes = universe["code"].tolist()[:100]

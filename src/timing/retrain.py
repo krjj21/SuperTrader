@@ -192,8 +192,22 @@ def _retrain_rl_model(
     current_model_path: str,
     val_ratio: float,
 ) -> dict:
-    """RL 모델 재학습 — Sharpe ratio 기반 비교."""
-    from src.timing.rl_trainer import train_rl_model, evaluate_rl_agent
+    """RL 모델 재학습 — *이중 게이트* 기반 비교.
+
+    교체 조건 (모두 만족해야 신모델 채택):
+      1) val_sharpe 개선 (single-stock episode 평균, +0.05 이상)
+      2) portfolio_sharpe 개선 (30종목 미니 backtest, +0.05 이상)
+      3) portfolio_mdd 악화 ≤ 5%p (예: -10% → -15% 까지 허용, -10% → -20% 거부)
+
+    portfolio eval 실패 시 보수적으로 교체 거부 (silent regression 차단).
+    기존 모델 부재 시 신모델 무조건 저장.
+
+    이는 2026-04-27 retrain 사후 분석에서 도출 — val 환경(99종목 단일 episode 평균)
+    이 실제 portfolio simulation 과 분리되어 있어 overfit 검출 불가했던 결함을 막는다.
+    """
+    from src.timing.rl_trainer import (
+        train_rl_model, evaluate_rl_agent, evaluate_rl_portfolio,
+    )
     from src.timing.rl_agent import RLTimingModel
 
     current_path = Path(current_model_path)
@@ -206,16 +220,17 @@ def _retrain_rl_model(
         return {"error": result["error"], "replaced": False}
 
     new_sharpe = result.get("sharpe", -999.0)
-    logger.info(f"새 RL 모델 Sharpe: {new_sharpe:.3f}")
+    logger.info(f"새 RL 모델 val_sharpe: {new_sharpe:.3f}")
 
     # 2. 기존 모델과 비교
     replaced = False
+    new_portfolio_sharpe = -999.0
+    old_portfolio_sharpe = -999.0
+    new_portfolio_mdd = 0.0
+    old_portfolio_mdd = 0.0
 
     if current_path.exists():
-        old_agent = RLTimingModel()
-        old_agent.load(str(current_path))
-
-        # 검증용 데이터 분할
+        # 검증용 데이터 분할 (학습/평가 동일 구간)
         val_dict = {}
         for code, df in ohlcv_dict.items():
             if len(df) < 100:
@@ -223,21 +238,63 @@ def _retrain_rl_model(
             split_idx = int(len(df) * (1 - val_ratio))
             val_dict[code] = df.iloc[split_idx:].reset_index(drop=True)
 
+        # ── Gate 1: 단일종목 episode Sharpe (기존 비교) ──
+        old_agent = RLTimingModel()
+        old_agent.load(str(current_path))
         old_metrics = evaluate_rl_agent(old_agent, val_dict)
         old_sharpe = old_metrics["sharpe"]
-        logger.info(f"기존 RL 모델 Sharpe: {old_sharpe:.3f}")
+        logger.info(f"기존 RL 모델 val_sharpe: {old_sharpe:.3f}")
+        gate1_pass = new_sharpe > old_sharpe + 0.05
 
-        if new_sharpe > old_sharpe + 0.05:  # Sharpe 0.05 이상 개선
+        # ── Gate 2 + 3: portfolio Sharpe + MDD ──
+        gate2_pass = False
+        gate3_pass = False
+        try:
+            new_agent = RLTimingModel()
+            new_agent.load(tmp_path)
+            new_pf = evaluate_rl_portfolio(new_agent, val_dict)
+            old_pf = evaluate_rl_portfolio(old_agent, val_dict)
+            new_portfolio_sharpe = new_pf.get("sharpe", -999.0)
+            old_portfolio_sharpe = old_pf.get("sharpe", -999.0)
+            new_portfolio_mdd = new_pf.get("max_drawdown", 0.0)
+            old_portfolio_mdd = old_pf.get("max_drawdown", 0.0)
+
+            logger.info(
+                f"Portfolio Sharpe: 기존 {old_portfolio_sharpe:.3f} → 신 {new_portfolio_sharpe:.3f}, "
+                f"MDD: {old_portfolio_mdd:.2f}% → {new_portfolio_mdd:.2f}%"
+            )
+
+            gate2_pass = new_portfolio_sharpe > old_portfolio_sharpe + 0.05
+            # MDD: 더 음수일수록 나쁨. 신모델 MDD가 기존 -5%p 이내 악화는 허용
+            gate3_pass = new_portfolio_mdd >= old_portfolio_mdd - 5.0
+        except Exception as e:
+            logger.warning(
+                f"Portfolio eval 실패 → 교체 거부 (안전 fallback): {e}"
+            )
+            gate2_pass = False
+            gate3_pass = False
+
+        all_pass = gate1_pass and gate2_pass and gate3_pass
+        logger.info(
+            f"교체 게이트: gate1(val_sharpe)={'✓' if gate1_pass else '✗'} "
+            f"gate2(pf_sharpe)={'✓' if gate2_pass else '✗'} "
+            f"gate3(pf_mdd)={'✓' if gate3_pass else '✗'}"
+        )
+
+        if all_pass:
             backup_path = current_path.with_suffix(
                 f".backup_{datetime.now():%Y%m%d_%H%M}.pt"
             )
             shutil.copy2(current_path, backup_path)
             shutil.move(tmp_path, str(current_path))
             replaced = True
-            logger.info(f"RL 모델 교체: Sharpe {old_sharpe:.3f} → {new_sharpe:.3f}")
+            logger.info(
+                f"RL 모델 교체 완료: val {old_sharpe:.3f}→{new_sharpe:.3f}, "
+                f"pf {old_portfolio_sharpe:.3f}→{new_portfolio_sharpe:.3f}"
+            )
         else:
             Path(tmp_path).unlink(missing_ok=True)
-            logger.info("RL 모델 유지: Sharpe 개선 부족")
+            logger.info("RL 모델 유지: 게이트 미통과")
     else:
         # 기존 모델 없으면 바로 저장
         current_path.parent.mkdir(parents=True, exist_ok=True)
@@ -253,4 +310,8 @@ def _retrain_rl_model(
         "val_samples": result.get("n_episodes", 0),
         "signal_dist": {"buy": 0, "sell": 0, "hold": 0},
         "sharpe": new_sharpe,
+        "new_portfolio_sharpe": new_portfolio_sharpe,
+        "old_portfolio_sharpe": old_portfolio_sharpe,
+        "new_portfolio_mdd": new_portfolio_mdd,
+        "old_portfolio_mdd": old_portfolio_mdd,
     }

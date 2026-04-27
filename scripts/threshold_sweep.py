@@ -52,7 +52,8 @@ def main():
     logger.info(f"종목풀 구축 완료: {pool_time/60:.0f}분")
 
     # ── 3. Threshold 그리드 서치 ──
-    thresholds = [0.15, 0.13, 0.11, 0.09, 0.07, 0.05]
+    # 사용자 요청: 0.00 까지만 (음수 영역 제외)
+    thresholds = [0.05, 0.03, 0.01, 0.00]
     sell_threshold = config.timing.rl.sell_action_threshold
     results = {}
 
@@ -107,6 +108,17 @@ def main():
             f"{m.get('profit_factor',0):>6.2f} "
             f"{m.get('total_trades',0):>7.0f}"
         )
+
+    # ── 4-b. 결과 JSON 저장 (wrapper 가 읽음) ──
+    import json
+    Path("data").mkdir(exist_ok=True)
+    out_path = Path("data/threshold_sweep_results.json")
+    out_path.write_text(json.dumps({
+        str(th): {k: float(v) if isinstance(v, (int, float)) else v
+                  for k, v in (m or {}).items()}
+        for th, m in results.items()
+    }, ensure_ascii=False, indent=2))
+    logger.info(f"결과 JSON 저장: {out_path}")
 
     # ── 5. Slack 전송 ──
     try:

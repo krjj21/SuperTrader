@@ -33,6 +33,9 @@ class TradingEnv:
         opportunity_weight: float = 0.35,    # 미보유 시 기회비용 가중치 (v2: 0.5 → 과매매)
         invalid_penalty: float = 0.002,
         sentiment_lambda: float = 0.0,       # SAPPO: reward += lambda * sentiment(date)
+        # Trading-frequency penalty (2026-04-28 추가 — 과매매 정책 학습 차단)
+        min_holding_days: int = 5,           # 이 기간 미만 SELL 시 페널티
+        short_hold_penalty: float = 0.01,    # 짧은 보유 SELL 1회당 negative reward
     ):
         self.commission_rate = commission_rate
         self.tax_rate = tax_rate
@@ -48,6 +51,10 @@ class TradingEnv:
         self.opportunity_weight = opportunity_weight
         self.invalid_penalty = invalid_penalty
         self.sentiment_lambda = sentiment_lambda
+
+        # Trading-frequency penalty
+        self.min_holding_days = min_holding_days
+        self.short_hold_penalty = short_hold_penalty
 
         # 에피소드 상태
         self._features: np.ndarray | None = None
@@ -196,7 +203,15 @@ class TradingEnv:
             else:
                 sell_bonus = 0.0
 
-            base_return = -cost + sell_bonus
+            # Trading-frequency penalty: min_holding_days 미만 보유 후 SELL 시 추가 페널티
+            # 손절(-3% 이하)은 면제 (손실 확대 방지가 우선)
+            short_hold_pen = 0.0
+            if self._holding_days < self.min_holding_days and realized_pnl >= -0.03:
+                short_hold_pen = self.short_hold_penalty * (
+                    1.0 - self._holding_days / self.min_holding_days
+                )
+
+            base_return = -cost + sell_bonus - short_hold_pen
             self._holding = False
             self._entry_price = 0.0
             self._holding_days = 0
