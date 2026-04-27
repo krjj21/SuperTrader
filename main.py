@@ -431,6 +431,18 @@ def run_live():
         except Exception as e:
             logger.warning(f"[REGIME] 시작 시 regime 복원 실패: {e}")
 
+    def _skip_if_market_closed(job_name: str) -> bool:
+        """주말/공휴일/임시휴장이면 True 반환 (잡 본문 직전에 호출).
+        FDR 조회 실패 시 보수적으로 False 반환 (일을 진행).
+        """
+        from src.utils.market_calendar import is_market_holiday
+        from datetime import datetime as _dt
+        now = _dt.now()
+        if now.weekday() >= 5 or is_market_holiday(now):
+            logger.info(f"[{job_name}] 휴장일/주말 — skip ({now.strftime('%Y-%m-%d %a')})")
+            return True
+        return False
+
     def sync_runtime_status() -> None:
         pool = _current_pool[0]
         save_runtime_status(
@@ -444,7 +456,9 @@ def run_live():
         )
 
     def rebalance_pool():
-        """팩터 기반 종목풀을 리밸런싱합니다."""
+        """팩터 기반 종목풀을 리밸런싱합니다 (휴장일이면 skip → 다음 사이클 대기)."""
+        if _skip_if_market_closed("rebalance_pool"):
+            return
         today = datetime.now().strftime("%Y%m%d")
         try:
             pool = build_stock_pool(
@@ -802,6 +816,8 @@ def run_live():
 
     def daily_report():
         """일일 리포트 + LLM 피드백"""
+        if _skip_if_market_closed("daily_report"):
+            return
         try:
             balance = account_mgr.get_balance()
             notifier.notify_daily_report(balance)
@@ -938,15 +954,21 @@ def run_live():
             logger.warning(f"[{tag}] 실행 실패: {e}")
 
     def daily_sappo_fetch():
+        if _skip_if_market_closed("SAPPO"):
+            return
         _run_sappo_script(["scripts/fetch_daily_news.py"], "SAPPO", timeout=900)
 
     def daily_market_news_fetch():
+        if _skip_if_market_closed("REGIME news"):
+            return
         if not config.regime.news_fetch_enabled:
             logger.debug("[REGIME] news_fetch_enabled=False — 시장 뉴스 수집 skip")
             return
         _run_sappo_script(["scripts/fetch_market_news.py"], "REGIME news", timeout=600)
 
     def detect_regime_daily():
+        if _skip_if_market_closed("REGIME detect"):
+            return
         if not config.regime.enabled:
             logger.debug("[REGIME] enabled=False — detect skip")
             return

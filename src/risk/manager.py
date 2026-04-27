@@ -31,7 +31,7 @@ class RiskManager:
 
     @property
     def is_trading_allowed(self) -> bool:
-        """매매가 허용되는지 확인합니다 (kill switch + 장 운영 시간)."""
+        """매매가 허용되는지 확인합니다 (kill switch + 장 운영 시간 + 영업일)."""
         if self._kill_switch:
             logger.warning("🚨 Kill switch 활성화 - 매매 중지")
             return False
@@ -47,6 +47,15 @@ class RiskManager:
         if now.weekday() >= 5:
             logger.debug("주말 — 매매 중지")
             return False
+
+        # 한국 공휴일 / 임시 휴장 체크 (FDR KS11 데이터 기반)
+        try:
+            from src.utils.market_calendar import is_market_holiday
+            if is_market_holiday(now):
+                logger.debug(f"휴장일 — 매매 중지 ({now.strftime('%Y-%m-%d')})")
+                return False
+        except Exception as e:
+            logger.warning(f"휴장일 판정 실패: {e} — 보수적으로 매매 허용")
 
         return True
 
