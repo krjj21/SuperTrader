@@ -36,6 +36,10 @@ python scripts/fetch_daily_news.py --date 20260419     # backfill
 python scripts/fetch_daily_news.py --codes 005930 035420
 python scripts/weekly_sappo_report.py --slack          # weekly IC / training-run comparison (cron Sat 07:00)
 
+# Regime Detector pipeline (cron 08:30/08:45 daily, weekday + market-open only)
+python scripts/fetch_market_news.py                    # KOSPI-level news + sentiment, stored as stock_code='_MARKET_'
+python scripts/fetch_market_news.py --date 20260427    # backfill
+
 # Codex CLI review pipeline (3 modes)
 python scripts/codex_review.py daily                   # today's trading results → reports/codex_daily_YYYY-MM-DD.md
 python scripts/codex_review.py backtest                # latest backtest log
@@ -57,7 +61,7 @@ No test suite exists (`tests/` directory is empty).
 
 ## Architecture
 
-SuperTrader is a Korean stock (KOSPI/KOSDAQ) auto-trading system combining **factor-based stock selection**, **ML/RL timing signals**, **LLM signal validation (with rule-based post-check)**, and **news-based SAPPO sentiment augmentation** for RL retraining.
+SuperTrader is a Korean stock (KOSPI/KOSDAQ) auto-trading system combining **factor-based stock selection**, **ML/RL timing signals**, **LLM signal validation (with rule-based post-check)**, **news-based SAPPO sentiment augmentation** for RL retraining, and a **HMM/LLM-blend Regime Detector** that modulates factor weights and position sizing per market state.
 
 ### Five execution modes
 - **backtest**: Runs strategies on historical data with optional LLM filter
@@ -70,26 +74,32 @@ SuperTrader is a Korean stock (KOSPI/KOSDAQ) auto-trading system combining **fac
 
 ```
 startup:
-  _restore_pool_from_disk()  → reads data/current_pool.json, skip rebalance if ≥10 stocks
-    └─ fallback: rebalance_pool() builds 30-stock pool via factor scoring
+  get_latest_regime()       → restore _current_regime[0] from sappo_regime_labels (if regime.enabled)
+  _restore_pool_from_disk() → reads data/current_pool.json, skip rebalance if ≥10 stocks
+    └─ fallback: rebalance_pool(regime_label=_current_regime[0]) builds 30-stock pool
 
 every 5 min (market hours):
+  is_trading_allowed: kill switch + market hours + weekend + Korean holiday (FDR KS11)
   get_balance() → sync held_codes
   stop_loss check (LLM-free, immediate)
   force-sell pool exits (held_codes - pool_codes)
   for each stock in pool:
     strategy.generate_signal() → BUY/SELL/HOLD
     if actionable: LLM validate → rule post-check (rule wins if disagree)
-    if confirmed: RiskManager.validate_order → OrderManager → KIS API
+    if confirmed: RiskManager.validate_order(regime_label=...) → OrderManager → KIS API
   check_filled() → emit ✅ confirmation after ~5min
   save_daily_pnl snapshot
 
-daily 15:40: daily_report (Slack + Notion)
+daily 08:30: fetch_market_news.py    (KOSPI 시황 → market sentiment)
+daily 08:45: detect_regime_daily     (GMM 3-state + LLM blend → sappo_regime_labels)
+daily 15:40: daily_report (Slack + Notion + Codex daily review)
 daily 16:00: SAPPO fetch (news + sentiment)
 monthly day=1 08:30: rebalance_pool
 weekly Sat 06:00: ML retrain
 weekly Sat 07:00: SAPPO weekly report (Slack)
 ```
+
+All daily jobs (`daily_report`, `daily_sappo_fetch`, `daily_market_news_fetch`, `detect_regime_daily`, `rebalance_pool`) call `_skip_if_market_closed()` first — weekends + Korean holidays auto-skip. `weekly_retrain` and `weekly_sappo_report` are intentionally Saturday-scheduled and bypass this guard.
 
 ### Data Pipeline (backtest mode — uses same factor pipeline as live)
 
@@ -154,7 +164,7 @@ RL trains on daily bars (1 step = 1 trading day). Live checks every 5 min but `h
 
 ### RL Action Thresholds (`config/settings.yaml` → `timing.rl`)
 
-- `buy_action_threshold: 0.07` — optimized via grid search after 2026-04-19 fixes
+- `buy_action_threshold: 0.05` — current default (was 0.07 in earlier sweep; lowered after 2026-04-27)
 - `sell_action_threshold: 0.06`
 - `sentiment_lambda: 0.0` — SAPPO off by default, 0.1 when news data ≥6 months accumulated
 - `sentiment_source: "off"` — off / news / mock / xgb_proxy
@@ -191,11 +201,12 @@ SQLAlchemy + SQLite (`data/trading.db`, WAL mode). Two module sets coexist in sa
 - `signal_logs` — `signal_type ∈ {llm, summary, pool_exit}`. Used by web dashboard and `llm_ic_analysis.py`.
 
 **SAPPO tables (`src/db/sappo_models.py`, `expire_on_commit=False`)**:
-- `sappo_news` — raw articles (stock_code, date, url UNIQUE)
-- `sappo_sentiment_scores` — (stock_code, date) PK, score/confidence/rationale
+- `sappo_news` — raw articles (stock_code, date, url UNIQUE). Market-level news uses `stock_code='_MARKET_'`.
+- `sappo_sentiment_scores` — (stock_code, date) PK, score/confidence/rationale. Market sentiment shares the same table with `_MARKET_` code.
 - `sappo_training_runs` — PPO/SAPPO run history (lambda, Sharpe, return, MDD, model_path)
 - `sappo_sentiment_ic` — IC measurement snapshots
 - `sappo_weekly_metrics` — week-start PK, aggregates for verification reports
+- `sappo_regime_labels` — daily regime label (date PK, label, hmm_state, hmm_prob_*, kospi_return_60d, kospi_vol_60d, llm_score, overridden_by_llm). Source for `_current_regime` startup restore.
 
 `HoldingPosition.buy_date` (YYYYMMDD) solves holding_days=0 bug on restart.
 
@@ -205,27 +216,63 @@ SQLAlchemy + SQLite (`data/trading.db`, WAL mode). Two module sets coexist in sa
 /mnt/e/SuperTrader/venv/Scripts/python.exe web/app.py
 ```
 
-Sections: Summary cards, Cumulative Return chart, Holdings table (click for indicators), Factor Pool (30 stocks), Recent Signals (RL + LLM).
+Sections: Summary cards, **Returns block** (7 metric cards [Cumulative / MDD / Best day / Worst day / Win rate / Sharpe / current Regime chip] + cumulative line + daily P&L bar), Holdings table (click for indicators), Factor Pool (30 stocks), Recent Signals (RL + LLM).
 
-API: `/api/status`, `/api/pool` (reads `data/current_pool.json` with encoding fallback), `/api/signals`, `/api/returns`, `/api/indicators/<code>`.
+API: `/api/status`, `/api/pool` (reads `data/current_pool.json` with encoding fallback), `/api/signals`, `/api/returns` (returns `metrics{}` + `daily_change_pct[]` + `regime_labels[]` joined from `sappo_regime_labels`), `/api/indicators/<code>`.
 
 ### Live Trading (`src/broker/`, `src/risk/`, `src/notification/`)
 
 - **kis_client.py**: KIS REST API, virtual/real switch via `is_virtual`. 10 calls/sec rate limit.
 - **order.py**: `Order.reference_price` (signal-time price) for market-order notification display. `check_filled()` updates filled_qty/price post-fill.
 - **account.py**: `AccountSummary` with `total_deposit` (D+2) and `available_cash` (unsettled-aware).
-- **risk/manager.py**: 5%/position, -5% daily loss limit, -7% stop loss, kill switch (3 consecutive errors).
-- **notification/slack_bot.py**: **Dual channels** — `#supertrader` (system/reports/feedback), `#super_trader_buy_sell` (signals/fills/fails/stop-loss). `SLACK_TRADE_CHANNEL` env override supported.
+- **risk/manager.py**: 5%/position, -5% daily loss limit, -7% stop loss, kill switch (3 consecutive errors). `is_trading_allowed` blocks weekends + Korean holidays via `src/utils/market_calendar.py`. `calculate_position_size(regime_label=...)` applies a multiplier when `regime.enabled and regime.lambda_>0`.
+- **notification/slack_bot.py**: **Dual channels** — `#supertrader` (system/reports/feedback/regime alerts), `#super_trader_buy_sell` (signals/fills/fails/stop-loss). `SLACK_TRADE_CHANNEL` env override supported. `notify_info()` for general system messages.
 - **notification/notion_reporter.py**: Daily trading log to Notion DB.
 
 ### Live Trading Schedules (APScheduler, registered in `main.py::run_live`)
 
-- Signal check: every `check_interval_sec` (300s) from market_open (09:00)
+- Signal check: every `check_interval_sec` (300s) from market_open (09:00) — gated by `is_trading_allowed`
+- **Daily market news (08:30)** → `scripts/fetch_market_news.py` (only if `regime.news_fetch_enabled`)
+- **Daily regime detect (08:45)** → `detect_regime_daily()` → `sappo_regime_labels` + Slack alert
 - Daily report: 15:40
 - **Daily SAPPO fetch: 16:00** → `scripts/fetch_daily_news.py`
 - Monthly rebalance: day 1 at pre_market (08:30)
 - Weekly retrain: Saturday 06:00
 - **Weekly SAPPO report: Saturday 07:00** → `scripts/weekly_sappo_report.py --slack`
+
+All daily jobs guarded by `_skip_if_market_closed()` (defined in `run_live`); weekly Saturday jobs intentionally skip the guard.
+
+### Regime Detector (`src/regime/`)
+
+Daily KOSPI market-state classifier (Phase 1+2 — factor-weight + position-size modulation; Phase 3 RL-state one-hot deferred to a future round to avoid retraining the existing PPO model).
+
+**Inputs**:
+- KOSPI index `KS11` via FDR — last 60 trading days of `(log_return, 20-day rolling vol)`
+- Market sentiment via `scripts/fetch_market_news.py` — Google News RSS on KOSPI keywords → Claude Haiku → `sappo_sentiment_scores` row with `stock_code='_MARKET_'`
+
+**Pipeline (`detector.py:RegimeDetector.detect_today()`)**:
+1. `sklearn.mixture.GaussianMixture(n=3, covariance_type='full', random_state=42)` fit on the 60-day feature matrix. **Note**: original plan was `hmmlearn.GaussianHMM` — Python 3.14 has no prebuilt wheel and MSVC isn't installed, so GMM substitutes. Markov persistence is approximated by a "keep yesterday's label if its posterior ≥0.4" heuristic in `_smooth_with_yesterday()`.
+2. Posterior labelling (`_fit_and_assign`): cluster with highest mean-vol → `high_vol_risk_off`; among the rest, higher mean-return → `risk_on_trend`; remaining → `mean_revert`.
+3. LLM override (`_combine_with_llm`): if `|llm_score| > regime.llm_override_threshold` (default 0.3), HMM result can be demoted (`risk_on→risk_off` on strong negative) or promoted (`risk_off→revert` on strong positive). Other combinations pass through.
+
+**Modulation hooks** (only active when `regime.enabled AND regime.lambda_ > 0`):
+- `compute_ic_weighted_composite(category_weights=...)` — IC weights × category multiplier (from `weights.py:_CATEGORY_WEIGHTS`), then renormalized. λ-interpolated: `1 + λ * (mult − 1)`.
+- `RiskManager.calculate_position_size(regime_label=...)` — `qty *= 1 + λ * (pos_mult − 1)` from `weights.py:_POSITION_MULTIPLIER`.
+- `build_stock_pool(regime_label=...)` is the single injection point; `main.py` passes `_current_regime[0]` from monthly rebalance, and `check_signals` passes it to `calculate_position_size`.
+
+**Factor categories** are sourced from `alpha101.FACTOR_REGISTRY` + `alpha158.FACTOR_REGISTRY` (cached in `weights.py:_FACTOR_CATEGORY_CACHE`). Factors not in either registry get multiplier 1.0 (no-op).
+
+**Activation discipline**: `regime.enabled=true, regime.lambda_=0.0` is the default — labels are recorded daily but trades are unaffected (dark-launch). Flip `lambda_` to 1.0 only after several weeks of label observation + a side-by-side backtest.
+
+### Market Calendar (`src/utils/market_calendar.py`)
+
+`is_korean_market_open(date)` / `is_market_holiday(date)`:
+- Weekend → immediate False (no network call)
+- Weekday → query FDR `KS11` for that week's range; date present in index → open
+- Result cached in process-lifetime dict `_open_cache`
+- FDR failure → conservatively returns *open* (so jobs don't silently stop on transient network issues; operator notices via warning log)
+
+This is the single source of truth for "should we trade today / publish a daily report today". `RiskManager.is_trading_allowed` and `main.py:_skip_if_market_closed()` both call into it.
 
 ### SAPPO (Sentiment-Augmented PPO) Pipeline
 
@@ -272,16 +319,21 @@ Auto-triggers: `--review` flag on backtest, `config.codex.enabled=true` for dail
 ### Key Design Decisions
 
 - **Pool restore on restart** (`_restore_pool_from_disk`) — prevents mass pool-diff trades when restarting intraday. Only rebuilds if <10 stocks saved.
+- **Regime restore on restart** — `get_latest_regime()` reads `sappo_regime_labels` so `_current_regime[0]` survives restarts; the new label only appears at the next 08:45 detect.
+- **Regime is dark-launched by default** — `regime.enabled=true, lambda_=0.0` keeps labels recorded daily but holds trade impact at zero. Flipping `lambda_` is the only config change to activate.
 - **Rule post-check** for LLM — deterministic rules override LLM if they disagree. Prevents LLM's loose interpretations (e.g. "RSI near 85" = hold) from breaking strategy intent.
 - **Sentiment is learning-only** — SAPPO injects into reward during training; inference path unchanged.
 - **Duplicate buy prevention** via `held_codes` set before every BUY order.
 - **Model retraining** only replaces if F1 improves by >0.5%p; old model auto-backed up.
 - **LLM validation** falls back to rule-based when API key missing or 404.
+- **Holiday gating is opt-in per job** — daily jobs explicitly call `_skip_if_market_closed()` at the top of their bodies. This lets weekly Saturday jobs (retrain, SAPPO weekly report) run without modification, and lets ad-hoc backfill scripts pass dates explicitly without skipping.
 - **KIS order flow**: submit (no fill info) → next cycle `check_filled()` → emit ✅ confirmation with real filled_qty/price. Immediate notification uses `reference_price` (signal-time estimate).
 
 ### Environment Gotchas
 
 - **WSL + Windows venv**: use `/mnt/e/SuperTrader/venv/Scripts/python.exe`, not Linux python.
+- **Python 3.14.3 — no `hmmlearn` wheel + MSVC absent**: source build fails. `Regime Detector` uses `sklearn.mixture.GaussianMixture` instead of the originally-planned HMM. Markov persistence is approximated by a posterior-keep heuristic (see `src/regime/detector.py:_smooth_with_yesterday`). Don't try to re-add `hmmlearn` to `requirements.txt` without first installing Visual C++ Build Tools.
+- **Holiday detection is FDR-derived, not hardcoded**: `src/utils/market_calendar.py` queries `KS11` to confirm the date has data. On FDR failure it falls back to *market-open=True* on purpose — silent skips would hide outages. Watch for `[CALENDAR] FDR 조회 실패` warnings in the log.
 - **pykrx cross-sectional API broken in this environment**: `get_market_cap`, `get_market_ticker_list`, `get_market_fundamental` return empty DataFrame due to KRX endpoint changes. Verified broken under both WSL Linux python and the Windows venv (`venv/Scripts/python.exe`) — it is not a WSL-only issue. OHLCV per-ticker still works. PIT membership is reconstructed via FDR `KRX-DESC` + `KRX-DELISTING` instead (see "Point-in-Time Universe" section below).
 - **FDR `Volume` column is intraday today**: empty at market open → universe shrinks to 1-2 stocks. `get_universe()` has fallback: if filtered result <30 stocks, skip volume filter.
 - **Trained models in `models/`**: `.pkl` (sklearn), `.pt` (torch). Not checked into git. RL backups: `rl_timing.backup_grpo.pt`, `backup_ppo_v1.pt`, `backup_ppo_v2.pt`.
