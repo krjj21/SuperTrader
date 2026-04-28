@@ -88,6 +88,13 @@ SuperTrader is a Korean stock (KOSPI/KOSDAQ) auto-trading system combining **fac
 - **retrain**: Trains a candidate, replaces the live model only if F1 improves (auto-backup)
 - **status**: Account holdings and P&L
 
+`main.py` is a thin (~100 line) CLI dispatcher: `argparse + setup_logging + lazy-import + delegate to src/runtime/<mode>.py`. Each mode lives in its own module:
+- `src/runtime/backtest.py` — `run_backtest` + 8 helpers (rebalance dates, pool history, IC accumulation, model train check, Slack/Codex hooks)
+- `src/runtime/live.py` — `run_live` + `_create_live_strategy` + 12 closures over `_current_pool/_current_regime/_stock_names/strategy/notifier/...`
+- `src/runtime/training.py` — `run_train` (fresh) + `run_retrain` (gate-guarded replacement)
+- `src/runtime/status.py` — KIS balance + holdings printer
+- `main.py` does not contain any mode logic; if you're adding a new mode, create another module under `src/runtime/`.
+
 ### Live Trading Pipeline
 
 ```
@@ -275,7 +282,7 @@ API: `/api/status`, `/api/pool` (reads `data/current_pool.json` with encoding fa
 - **notification/slack_bot.py**: **Dual channels** — `#supertrader` (system/reports/feedback/regime alerts), `#super_trader_buy_sell` (signals/fills/fails/stop-loss). `SLACK_TRADE_CHANNEL` env override supported. `notify_info()` for general system messages.
 - **notification/notion_reporter.py**: Daily trading log to Notion DB.
 
-### Live Trading Schedules (APScheduler, registered in `main.py::run_live`)
+### Live Trading Schedules (APScheduler, registered in `src/runtime/live.py:run_live`)
 
 - Signal check: every `check_interval_sec` (300s) from market_open (09:00) — gated by `is_trading_allowed`
 - **Daily market news (08:30)** → `scripts/fetch_market_news.py` (only if `regime.news_fetch_enabled`)
@@ -321,7 +328,7 @@ Daily KOSPI market-state classifier (Phase 1+2 — factor-weight + position-size
 - Result for past dates / holidays cached in process-lifetime dict `_open_cache`.
 - FDR call failure → conservatively returns *open* (so jobs don't silently stop on transient network issues; operator notices via warning log)
 
-This is the single source of truth for "should we trade today / publish a daily report today". `RiskManager.is_trading_allowed` and `main.py:_skip_if_market_closed()` both call into it. Cached holiday verdicts persist for the lifetime of `main.py live`; if you push a calendar fix, **restart the live process** to invalidate stale `_open_cache` entries.
+This is the single source of truth for "should we trade today / publish a daily report today". `RiskManager.is_trading_allowed` and the `_skip_if_market_closed()` closure inside `src/runtime/live.py:run_live` both call into it. Cached holiday verdicts persist for the lifetime of `main.py live`; if you push a calendar fix, **restart the live process** to invalidate stale `_open_cache` entries.
 
 ### SAPPO (Sentiment-Augmented PPO) Pipeline
 
@@ -346,7 +353,7 @@ Universe membership is reconstructed per-date from `data/universe_meta.csv` (bui
   - Volume filter uses `ohlcv_dict[code].volume.rolling(20).mean().asof(date)` when `ohlcv_dict` is passed; otherwise volume column is left at 0 (filter skipped).
   - **Cap filter known limit**: today's `Marcap` from FDR `KRX` listing is used (no historical shares-outstanding source). Delisted stocks are exempted from the cap filter (cap_map has no entry → would otherwise drop all historical members). This is a residual lookahead (Tier 3 unfixed).
   - Result cached at `data/universe_cache/uni_<sha1:12>.csv` keyed on `(date, market, min_market_cap, min_avg_volume, meta_signature, vol_mode)`. Bypass with `SUPER_TRADER_DISABLE_UNIVERSE_CACHE=1`.
-- `main.py:run_backtest` seeds `get_ohlcv_batch()` with the **union** of `get_universe(d)` over all rebalance dates so delisted codes' OHLCV is also pulled.
+- `src/runtime/backtest.py:run_backtest` seeds `get_ohlcv_batch()` with the **union** of `get_universe(d)` over all rebalance dates so delisted codes' OHLCV is also pulled.
 - `pool_cache._payload()` includes `pit_universe: True` and `meta_signature` (mtime+size SHA-1 of `universe_meta.csv`), so rebuilding the meta or upgrading from a pre-PIT cache automatically invalidates old `data/pool_cache/pool_*.json` (orphaned files can be deleted manually).
 - `filter_by_listing_date()` is preserved as a defensive net (no-op when meta is present; safety for legacy fallback).
 
