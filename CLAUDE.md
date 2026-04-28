@@ -40,6 +40,11 @@ python scripts/weekly_sappo_report.py --slack          # weekly IC / training-ru
 python scripts/fetch_market_news.py                    # KOSPI-level news + sentiment, stored as stock_code='_MARKET_'
 python scripts/fetch_market_news.py --date 20260427    # backfill
 
+# Foreign trading data (KIS API FHKST01010900, cron 16:30 daily)
+python scripts/fetch_foreign_buys.py                   # current pool (data/current_pool.json)
+python scripts/fetch_foreign_buys.py --universe all    # KOSPI universe (mid-cap pool source)
+python scripts/fetch_foreign_buys.py --codes 005930    # specific tickers
+
 # Codex CLI review pipeline (3 modes)
 python scripts/codex_review.py daily                   # today's trading results → reports/codex_daily_YYYY-MM-DD.md
 python scripts/codex_review.py backtest                # latest backtest log
@@ -103,16 +108,17 @@ every 5 min (market hours):
   check_filled() → emit ✅ confirmation after ~5min
   save_daily_pnl snapshot
 
-daily 08:30: fetch_market_news.py    (KOSPI 시황 → market sentiment)
-daily 08:45: detect_regime_daily     (GMM 3-state + LLM blend → sappo_regime_labels)
+daily 08:30: fetch_market_news.py       (KOSPI 시황 → market sentiment)
+daily 08:45: detect_regime_daily        (GMM 3-state + LLM blend → sappo_regime_labels)
 daily 15:40: daily_report (Slack + Notion + Codex daily review)
 daily 16:00: SAPPO fetch (news + sentiment)
-monthly day=1 08:30: rebalance_pool
+daily 16:30: fetch_foreign_buys.py --universe all  (KIS API → sappo_investor_trading)
+monthly day=1 08:30: rebalance_pool (or biweekly if rebalance_freq=biweekly)
 weekly Sat 06:00: ML retrain
 weekly Sat 07:00: SAPPO weekly report (Slack)
 ```
 
-All daily jobs (`daily_report`, `daily_sappo_fetch`, `daily_market_news_fetch`, `detect_regime_daily`, `rebalance_pool`) call `_skip_if_market_closed()` first — weekends + Korean holidays auto-skip. `weekly_retrain` and `weekly_sappo_report` are intentionally Saturday-scheduled and bypass this guard.
+All daily jobs (`daily_report`, `daily_sappo_fetch`, `daily_market_news_fetch`, `detect_regime_daily`, `daily_foreign_buys_fetch`, `rebalance_pool`) call `_skip_if_market_closed()` first — weekends + Korean holidays auto-skip. `weekly_retrain` and `weekly_sappo_report` are intentionally Saturday-scheduled and bypass this guard.
 
 ### Data Pipeline (backtest mode — uses same factor pipeline as live)
 
@@ -175,6 +181,22 @@ RL trains on daily bars (1 step = 1 trading day). Live checks every 5 min but `h
 
 **Reward v3 (current)**: `holding_cost=0.0002` + ramp `0.00005/day`, `opportunity_weight=0.35`. v4 (anti-churn) was reverted.
 
+### RL Training Hardening (2026-04-28)
+
+After a retrain on 2026-04-27 produced a **val_sharpe=+15.8 / portfolio_sharpe=−1.47** silent regression (model replaced and live had to be rolled back), `rl_trainer.py` + `retrain.py` were hardened with five interlocking checks. **None of them prevent the rollout step itself, only model selection and replacement.**
+
+1. **Training window** (`main.py` `run_retrain` / `weekly_retrain`): 730 → **1095 days** (3 yrs). 5-yr (1825) was tried but OOM'd at batch=88K on a 6GB GPU.
+2. **Trading-frequency reward** (`rl_env.py`): SELL within `min_holding_days=5` and `realized_pnl ≥ -3%` adds a `short_hold_penalty=0.01 × (1 - days/min)` — discourages 1.5d-avg-holding policies that overtrade.
+3. **`evaluate_rl_portfolio()`** (`rl_trainer.py`): a 30-stock mini portfolio backtest (PortfolioBacktestEngine + FactorRLStrategy, 60-day momentum top-N, ~22-day rebalance) called every `portfolio_eval_every=25` episodes. Logs `[Portfolio] sharpe/mdd/trades` alongside the per-episode `val_sharpe`.
+4. **Trades-adjusted score for `best`/early stop** (`rl_trainer.py`): `best_score = val_sharpe / (log(1 + avg_trades) + 1)` instead of raw `val_sharpe`. Same `patience=10` (× 5 episodes = 50 episodes no-improvement → break).
+5. **Triple gate in `_retrain_rl_model`** (`retrain.py`): replacement requires `val_sharpe > old + 0.05` **AND** `portfolio_sharpe > old + 0.05` **AND** `portfolio_mdd ≥ old − 5%p`. Any portfolio-eval exception → all three gates fail safely (model not replaced).
+
+**v5 result (2026-04-28)**: gates correctly rejected a candidate where `val_sharpe −63 → +10` improved but `portfolio_sharpe 2.6 → 1.5` regressed. Apr-16 backup remains the live model.
+
+### Backtest realism caveat (RL retrain context)
+
+`evaluate_rl_portfolio()` runs on the val_dict only — same data as `evaluate_rl_agent`. It is *not* a 7-yr replay; expect Sharpe values to be much higher than `main.py backtest --strategy factor_hybrid`. Treat portfolio-eval Sharpe as a relative gate-keeping metric, not an absolute performance forecast.
+
 ### RL Action Thresholds (`config/settings.yaml` → `timing.rl`)
 
 - `buy_action_threshold: 0.05` — current default (was 0.07 in earlier sweep; lowered after 2026-04-27)
@@ -203,7 +225,17 @@ Flow: `factor_rl.py` → `predictor.py` → `rl_agent.py`. Live `sync_positions(
 - `_build_pool_history_factor_based()` accumulates rolling (factor_history, return_history) and rebuilds `factor_report` every rebalance → enables **actual** IC-weighted composite (was falling back to equal-weight before 2026-04-19 fix)
 - **pool_cache.py** (new): `data/pool_cache/pool_<sha1:12>.json` keyed on 14 config fields. Saves ~60min on reruns.
 
-Rebalancing: monthly (day 1). Live restart uses `_restore_pool_from_disk()` to skip rebalance — prevents pool-diff mass trades on restart.
+Rebalancing: monthly (day 1) by default; switch to biweekly via `factors.rebalance_freq=biweekly`. Live restart uses `_restore_pool_from_disk()` to skip rebalance — prevents pool-diff mass trades on restart.
+
+### Mid-cap Pool Filter (Stage 1 + 2 add-ons, 2026-04-28)
+
+Optional pre-filters applied **before** the 220-factor IC scoring (Stage 1 = universe, Stage 2 = factor):
+
+- **Cap rank filter** (`universe.cap_rank_min`, `universe.cap_rank_max`): rank-based cap selection. e.g. `30/150` = mid-cap rank 30-150th. Activates only when both > 0; otherwise the legacy `min_market_cap` absolute threshold applies. Implemented in `_legacy_get_universe()` and `get_universe()` (PIT) — rank is computed on **today's snapshot cap** (Tier 3 PIT limit unresolved, so backtest "rank 30-150" is *current mid-cap's historical behavior*, not point-in-time mid-cap).
+- **Foreign trading pre-filter** (`factors.foreign_filter_enabled` + `pct` + `lookback`): inside `build_stock_pool()`, narrows the universe to top N% by N-day cumulative foreign net-buy amount (from `sappo_investor_trading`). When DB has no rows for the date, the filter logs a WARNING and skips (graceful fallback). Backtest with no foreign-buy history returns the full universe untouched.
+- Together with `factors.top_n` (default 30; tighten to 15 for selective mid-cap pool) and `rebalance_freq` (monthly/biweekly), this forms a 4-stage funnel: cap rank → foreign net-buy top % → 220-factor IC → top N.
+
+Validated 2026-04-28 backtest (factor_hybrid, 7-yr): cap rank 30-150 + top_n=15 + biweekly + foreign_filter graceful-skip produced Sharpe **−0.03** vs original (top_n=30, monthly) **+0.41** — *backtest not yet a fair test* because the foreign-buy filter's intended history (≥30 days × universe) hadn't accumulated. Treat current cap_rank+top_n combo as a *parameter to tune live*, not a validated config.
 
 ### Database (`src/db/`)
 
@@ -220,6 +252,7 @@ SQLAlchemy + SQLite (`data/trading.db`, WAL mode). Two module sets coexist in sa
 - `sappo_sentiment_ic` — IC measurement snapshots
 - `sappo_weekly_metrics` — week-start PK, aggregates for verification reports
 - `sappo_regime_labels` — daily regime label (date PK, label, hmm_state, hmm_prob_*, kospi_return_60d, kospi_vol_60d, llm_score, overridden_by_llm). Source for `_current_regime` startup restore.
+- `sappo_investor_trading` — KIS API FHKST01010900 daily (stock_code+date PK): foreign/organ/person net qty + amount (백만원). Source for the mid-cap foreign-buy pre-filter. Helpers: `upsert_investor_trading()`, `get_foreign_net_buy_cumulative(code, end_date, days)`.
 
 `HoldingPosition.buy_date` (YYYYMMDD) solves holding_days=0 bug on restart.
 
@@ -249,7 +282,8 @@ API: `/api/status`, `/api/pool` (reads `data/current_pool.json` with encoding fa
 - **Daily regime detect (08:45)** → `detect_regime_daily()` → `sappo_regime_labels` + Slack alert
 - Daily report: 15:40
 - **Daily SAPPO fetch: 16:00** → `scripts/fetch_daily_news.py`
-- Monthly rebalance: day 1 at pre_market (08:30)
+- **Daily foreign-buys fetch: 16:30** → `scripts/fetch_foreign_buys.py --universe all` (only if `factors.foreign_filter_enabled`)
+- Monthly rebalance: day 1 at pre_market (08:30) — or biweekly when `factors.rebalance_freq=biweekly`
 - Weekly retrain: Saturday 06:00
 - **Weekly SAPPO report: Saturday 07:00** → `scripts/weekly_sappo_report.py --slack`
 
@@ -282,10 +316,12 @@ Daily KOSPI market-state classifier (Phase 1+2 — factor-weight + position-size
 `is_korean_market_open(date)` / `is_market_holiday(date)`:
 - Weekend → immediate False (no network call)
 - Weekday → query FDR `KS11` for that week's range; date present in index → open
-- Result cached in process-lifetime dict `_open_cache`
-- FDR failure → conservatively returns *open* (so jobs don't silently stop on transient network issues; operator notices via warning log)
+- **Intraday handling (2026-04-28 fix)**: FDR doesn't populate today's KS11 row until ~16:00 KST. If `target == today` AND `now.time() < 16:00` AND target *not* in fetched dates, the function infers "intraday, FDR not yet posted" and returns *open* (provided the same week has at least one populated row — the sanity check that FDR itself works). Without this, every weekday 09:00–16:00 was being marked as a holiday, blocking the entire day's trading + reports.
+- After 16:00 with target absent from week's data → real holiday (cached). Earlier hits of the same date during intraday are deliberately *not* cached so the post-16:00 result can supersede.
+- Result for past dates / holidays cached in process-lifetime dict `_open_cache`.
+- FDR call failure → conservatively returns *open* (so jobs don't silently stop on transient network issues; operator notices via warning log)
 
-This is the single source of truth for "should we trade today / publish a daily report today". `RiskManager.is_trading_allowed` and `main.py:_skip_if_market_closed()` both call into it.
+This is the single source of truth for "should we trade today / publish a daily report today". `RiskManager.is_trading_allowed` and `main.py:_skip_if_market_closed()` both call into it. Cached holiday verdicts persist for the lifetime of `main.py live`; if you push a calendar fix, **restart the live process** to invalidate stale `_open_cache` entries.
 
 ### SAPPO (Sentiment-Augmented PPO) Pipeline
 
