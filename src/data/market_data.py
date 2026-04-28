@@ -113,9 +113,25 @@ def _legacy_get_universe() -> pd.DataFrame:
     df["market_cap"] = pd.to_numeric(listing.get("Marcap", 0), errors="coerce").fillna(0).astype(int)
     df["volume"] = pd.to_numeric(listing.get("Volume", 0), errors="coerce").fillna(0).astype(int)
 
-    df = df[df["market_cap"] >= config.min_market_cap]
     df = df[~df["name"].str.contains("스팩|리츠|ETF|ETN", na=False)]
     df = df[~df["code"].str[-1].isin(["5", "7", "9", "K", "L"])]
+
+    # Cap 필터: rank 모드 vs 절대값 모드
+    rank_mode = config.cap_rank_min > 0 and config.cap_rank_max > config.cap_rank_min
+    if rank_mode:
+        df = df.sort_values("market_cap", ascending=False).reset_index(drop=True)
+        # rank는 1-indexed (1=최대시총)
+        df["cap_rank"] = df.index + 1
+        df = df[
+            (df["cap_rank"] >= config.cap_rank_min)
+            & (df["cap_rank"] <= config.cap_rank_max)
+        ]
+        logger.info(
+            f"Cap rank 필터 적용: rank {config.cap_rank_min}~{config.cap_rank_max}위 "
+            f"→ {len(df)}종목"
+        )
+    else:
+        df = df[df["market_cap"] >= config.min_market_cap]
 
     filtered = df[df["volume"] >= config.min_avg_volume]
     if len(filtered) >= 30:
@@ -205,8 +221,24 @@ def get_universe(
     df["market_cap"] = df["code"].map(cap_map).fillna(0).astype("int64")
     if cap_map:
         is_delisted = df["delisted_date"].notna()
-        active_pass = (~is_delisted) & (df["market_cap"] >= config.min_market_cap)
-        df = df[active_pass | is_delisted]
+        rank_mode = config.cap_rank_min > 0 and config.cap_rank_max > config.cap_rank_min
+        if rank_mode:
+            # rank 모드: 활성 종목만 시총 desc rank 매기고 [min, max] 통과 (폐지 종목 제외)
+            active_df = df[~is_delisted].sort_values("market_cap", ascending=False).reset_index(drop=True)
+            active_df["cap_rank"] = active_df.index + 1
+            allowed = set(active_df[
+                (active_df["cap_rank"] >= config.cap_rank_min)
+                & (active_df["cap_rank"] <= config.cap_rank_max)
+            ]["code"].tolist())
+            df = df[df["code"].isin(allowed)]
+            logger.info(
+                f"PIT Cap rank 필터: rank {config.cap_rank_min}~{config.cap_rank_max}위 "
+                f"→ {len(df)}종목 (date={date}, 폐지 제외)"
+            )
+        else:
+            # 절대 cap 모드: 활성 + min_market_cap, 폐지는 면제 (생존편향 회피)
+            active_pass = (~is_delisted) & (df["market_cap"] >= config.min_market_cap)
+            df = df[active_pass | is_delisted]
 
     # 거래량 (가능하면 D 시점 rolling-20일 평균)
     if ohlcv_dict:

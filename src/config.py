@@ -45,6 +45,11 @@ class UniverseConfig(BaseModel):
     min_market_cap: int = 100_000_000_000
     min_avg_volume: int = 100_000
     exclude_sectors: list[str] = []
+    # Mid-cap rank 필터 (둘 다 >0 일 때만 활성화). 시총 desc rank, 1=최대시총.
+    # 예: cap_rank_min=30, cap_rank_max=150 → 시총 30~150위 (120종목)
+    # rank 활성화 시 min_market_cap 절대 필터는 비활성 (rank 기반으로 대체)
+    cap_rank_min: int = 0
+    cap_rank_max: int = 0
 
 
 class FactorConfig(BaseModel):
@@ -56,6 +61,10 @@ class FactorConfig(BaseModel):
     min_ir: float = 0.3
     neutralize_industry: bool = True
     neutralize_market_cap: bool = True
+    # 외국인 매매 사전 필터 (build_stock_pool 진입 시 적용)
+    foreign_filter_enabled: bool = False  # True 시 sappo_investor_trading 활용
+    foreign_filter_pct: float = 0.5       # 누적 외국인 순매수 상위 N% 통과 (0.5 = 상위 50%)
+    foreign_filter_lookback: int = 20     # 누적 일수 (영업일)
 
 
 class MACDParams(BaseModel):

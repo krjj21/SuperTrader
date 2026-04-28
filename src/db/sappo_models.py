@@ -171,6 +171,32 @@ class RegimeLabel(SappoBase):
 
 
 # ══════════════════════════════════════════════════════════════
+# 7. 외국인/기관/개인 매매 (KIS API FHKST01010900)
+# ══════════════════════════════════════════════════════════════
+class InvestorTrading(SappoBase):
+    """종목별 투자자 매매 일별 데이터 (KIS API).
+
+    Mid-cap 풀 선정 시 *외국인 20일 누적 순매수 상위 50%* 필터의 입력.
+    """
+    __tablename__ = "sappo_investor_trading"
+
+    stock_code = Column(String(10), primary_key=True)
+    date = Column(String(8), primary_key=True)              # YYYYMMDD
+    close_price = Column(Integer, default=0)
+    foreign_net_qty = Column(Integer, default=0)            # 외국인 순매수 수량
+    foreign_net_amount = Column(Integer, default=0)         # 외국인 순매수 거래대금 (원)
+    organ_net_qty = Column(Integer, default=0)              # 기관 순매수 수량
+    organ_net_amount = Column(Integer, default=0)
+    person_net_qty = Column(Integer, default=0)             # 개인 순매수 수량
+    fetched_at = Column(DateTime, default=datetime.now)
+
+    __table_args__ = (
+        Index("idx_investor_date", "date"),
+        Index("idx_investor_code_date", "stock_code", "date"),
+    )
+
+
+# ══════════════════════════════════════════════════════════════
 # DB 초기화 / 세션
 # ══════════════════════════════════════════════════════════════
 _engine = None
@@ -372,6 +398,76 @@ def save_ic_metric(
         session.commit()
         session.refresh(rec)
         return rec
+    finally:
+        session.close()
+
+
+def upsert_investor_trading(
+    stock_code: str,
+    date: str,
+    close_price: int = 0,
+    foreign_net_qty: int = 0,
+    foreign_net_amount: int = 0,
+    organ_net_qty: int = 0,
+    organ_net_amount: int = 0,
+    person_net_qty: int = 0,
+) -> None:
+    """투자자 매매 1건 upsert."""
+    session = get_sappo_session()
+    try:
+        existing = (
+            session.query(InvestorTrading)
+            .filter_by(stock_code=stock_code, date=date)
+            .first()
+        )
+        if existing:
+            existing.close_price = close_price
+            existing.foreign_net_qty = foreign_net_qty
+            existing.foreign_net_amount = foreign_net_amount
+            existing.organ_net_qty = organ_net_qty
+            existing.organ_net_amount = organ_net_amount
+            existing.person_net_qty = person_net_qty
+            existing.fetched_at = datetime.now()
+        else:
+            rec = InvestorTrading(
+                stock_code=stock_code, date=date,
+                close_price=close_price,
+                foreign_net_qty=foreign_net_qty,
+                foreign_net_amount=foreign_net_amount,
+                organ_net_qty=organ_net_qty,
+                organ_net_amount=organ_net_amount,
+                person_net_qty=person_net_qty,
+            )
+            session.add(rec)
+        session.commit()
+    finally:
+        session.close()
+
+
+def get_foreign_net_buy_cumulative(
+    stock_code: str,
+    end_date: str,
+    days: int = 20,
+) -> tuple[int, int]:
+    """end_date 까지 직전 N영업일 외국인 순매수 누적값.
+
+    Returns:
+        (cum_amount, n_days_used) — 거래대금 누적(원), 실제 사용된 날짜 수
+    """
+    session = get_sappo_session()
+    try:
+        rows = (
+            session.query(InvestorTrading)
+            .filter(
+                InvestorTrading.stock_code == stock_code,
+                InvestorTrading.date <= end_date,
+            )
+            .order_by(InvestorTrading.date.desc())
+            .limit(days)
+            .all()
+        )
+        cum = sum(int(r.foreign_net_amount or 0) for r in rows)
+        return cum, len(rows)
     finally:
         session.close()
 

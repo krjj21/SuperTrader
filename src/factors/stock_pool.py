@@ -62,6 +62,43 @@ def build_stock_pool(
 
     codes = universe["code"].tolist()
 
+    # 1-b. 외국인 매매 사전 필터 (foreign_filter_enabled=True 시)
+    # sappo_investor_trading 에서 N영업일 누적 순매수 거래대금 상위 pct% 만 통과
+    if getattr(config.factors, "foreign_filter_enabled", False):
+        try:
+            from src.db.sappo_models import init_sappo_db, get_foreign_net_buy_cumulative
+            init_sappo_db(config.database.path)
+            lookback = int(getattr(config.factors, "foreign_filter_lookback", 20))
+            pct = float(getattr(config.factors, "foreign_filter_pct", 0.5))
+            scores = []
+            n_with_data = 0
+            for code in codes:
+                cum, n = get_foreign_net_buy_cumulative(code, date, lookback)
+                # 데이터 부재 종목은 cum=0, n=0 → 중간 위치
+                if n > 0:
+                    n_with_data += 1
+                scores.append((code, cum, n))
+            if n_with_data == 0:
+                logger.warning(
+                    f"외국인 매매 데이터 0건 (date={date}) — 필터 skip. "
+                    f"scripts/fetch_foreign_buys.py --universe all 실행 필요"
+                )
+            else:
+                scores.sort(key=lambda x: x[1], reverse=True)
+                cutoff = max(1, int(len(scores) * pct))
+                allowed = {code for code, _, _ in scores[:cutoff]}
+                before = len(codes)
+                codes = [c for c in codes if c in allowed]
+                logger.info(
+                    f"외국인 매매 필터: {before}→{len(codes)}종목 "
+                    f"(상위 {pct*100:.0f}%, lookback={lookback}일, "
+                    f"데이터 보유 {n_with_data}/{before})"
+                )
+                # universe도 함께 좁힘 (이후 단계에서 일관성)
+                universe = universe[universe["code"].isin(codes)].reset_index(drop=True)
+        except Exception as e:
+            logger.warning(f"외국인 매매 필터 적용 실패: {e} — skip")
+
     # 2. 크로스섹션 팩터 계산
     factor_df = compute_cross_sectional_factors(codes, date, ohlcv_dict=ohlcv_dict)
     if factor_df.empty:

@@ -11,20 +11,27 @@ kis:
 # ── 유니버스 설정 ──
 universe:
   market: "KOSPI"                 # KOSPI, KOSDAQ, ALL
-  min_market_cap: 500_000_000_000  # 최소 시가총액 5000억
+  min_market_cap: 500_000_000_000  # 최소 시가총액 5000억 (cap_rank 비활성 시 적용)
   min_avg_volume: 300_000        # 최소 20일 평균 거래량
   exclude_sectors: []             # 제외 섹터
+  # Mid-cap rank 필터 (둘 다 >0 시 활성화, min_market_cap 절대값 대체)
+  cap_rank_min: 30               # 시총 desc rank 시작 (1=최대시총)
+  cap_rank_max: 150              # 시총 desc rank 끝 → 30~150위 = 120종목
 
 # ── 팩터 설정 ──
 factors:
   factor_module: "both"              # alpha101, alpha158, both
-  rebalance_freq: "monthly"        # biweekly, monthly, quarterly
-  top_n: 30                       # 종목풀 크기
+  rebalance_freq: "biweekly"      # biweekly, monthly, quarterly  (격주로 변경)
+  top_n: 15                       # 종목풀 크기 (mid-cap 정밀 선정)
   composite_method: "ic_weighted" # equal, ic_weighted
   ic_lookback: 12                 # IC 계산 lookback (개월)
   min_ir: 0.3                     # 최소 IR 임계값
   neutralize_industry: true
   neutralize_market_cap: true
+  # 외국인 매매 사전 필터 (build_stock_pool 진입 시 universe 축소)
+  foreign_filter_enabled: true   # sappo_investor_trading 활용 (라이브 + scraper 필요)
+  foreign_filter_pct: 0.5         # 누적 순매수 상위 50%만 통과
+  foreign_filter_lookback: 20     # 누적 영업일
 
 # ── 타이밍 모델 설정 ──
 timing:
@@ -90,7 +97,7 @@ timing:
     epochs_per_update: 4
     episodes: 200
     hidden_dim: 256
-    buy_action_threshold: 0.05
+    buy_action_threshold: 0.03
     sell_action_threshold: 0.06
     # SAPPO: reward += lambda × sentiment(code, date). 0 = 기본 PPO
     sentiment_lambda: 0.0

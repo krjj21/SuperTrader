@@ -966,6 +966,19 @@ def run_live():
             return
         _run_sappo_script(["scripts/fetch_market_news.py"], "REGIME news", timeout=600)
 
+    def daily_foreign_buys_fetch():
+        """외국인 매매 데이터 일일 수집 (Mid-cap 풀 외국인 필터 입력).
+        장 마감 후 16:30 — 당일 종가 기준 KIS API 데이터 갱신."""
+        if _skip_if_market_closed("FOREIGN BUYS"):
+            return
+        if not config.factors.foreign_filter_enabled:
+            logger.debug("[FOREIGN BUYS] foreign_filter_enabled=False — skip")
+            return
+        _run_sappo_script(
+            ["scripts/fetch_foreign_buys.py", "--universe", "all"],
+            "FOREIGN BUYS", timeout=900,
+        )
+
     def detect_regime_daily():
         if _skip_if_market_closed("REGIME detect"):
             return
@@ -1022,6 +1035,13 @@ def run_live():
         daily_sappo_fetch, "cron",
         hour=16, minute=0,
     )
+    # 일일 외국인 매매 수집 — SAPPO 다음 (16:30) — Mid-cap 풀 외국인 필터 입력
+    if config.factors.foreign_filter_enabled:
+        scheduler.add_job(
+            daily_foreign_buys_fetch, "cron",
+            hour=16, minute=30, id="foreign_buys_fetch",
+        )
+        logger.info("[FOREIGN BUYS] 스케줄 등록: 매일 16:30")
     # ── Regime Detector — 매일 장 시작 전 (08:30 시장 뉴스, 08:45 detect) ──
     if config.regime.enabled:
         scheduler.add_job(

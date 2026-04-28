@@ -269,6 +269,52 @@ class KISClient:
         records.sort(key=lambda x: x["date"])
         return records
 
+    def get_investor_trading(self, stock_code: str) -> list[dict]:
+        """종목별 투자자 매매동향 (최근 30일).
+
+        TR_ID: FHKST01010900 (종목별 투자자 매매동향).
+        Returns:
+            [{date, close, foreign_net_qty, foreign_net_amount, organ_net_qty, person_net_qty}, ...]
+            (날짜 오름차순, 가장 최근일 1건은 장중에는 빈 값일 수 있음)
+        """
+        tr_id = "FHKST01010900"
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": stock_code,
+        }
+        try:
+            data = self.get(
+                "/uapi/domestic-stock/v1/quotations/inquire-investor",
+                tr_id, params,
+            )
+        except Exception as e:
+            logger.warning(f"외국인 매매 조회 실패 [{stock_code}]: {e}")
+            return []
+
+        records = []
+        for item in data.get("output", []):
+            date = item.get("stck_bsop_date", "")
+            if not date:
+                continue
+            # 장중 당일은 frgn_ntby_qty 가 빈 문자열일 수 있음 → 0 으로 처리
+            def _to_int(v):
+                try:
+                    return int(v) if v not in (None, "", " ") else 0
+                except (ValueError, TypeError):
+                    return 0
+            records.append({
+                "date": date,
+                "close": _to_int(item.get("stck_clpr")),
+                "foreign_net_qty": _to_int(item.get("frgn_ntby_qty")),
+                "foreign_net_amount": _to_int(item.get("frgn_ntby_tr_pbmn")),
+                "organ_net_qty": _to_int(item.get("orgn_ntby_qty")),
+                "organ_net_amount": _to_int(item.get("orgn_ntby_tr_pbmn")),
+                "person_net_qty": _to_int(item.get("prsn_ntby_qty")),
+            })
+
+        records.sort(key=lambda x: x["date"])
+        return records
+
 
 # ──────────────────────────────────────────────
 # WebSocket 실시간 시세
