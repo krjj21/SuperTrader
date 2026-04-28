@@ -50,6 +50,8 @@ class PortfolioBacktestEngine:
         tax_rate: float = 0.0023,
         max_positions: int = 30,
         stop_loss_pct: float | None = None,
+        slippage_pct: float | None = None,
+        gap_penalty_pct: float | None = None,
         llm_validator=None,
         run_id: str = "",
         persist_signals: bool = False,
@@ -57,6 +59,21 @@ class PortfolioBacktestEngine:
         self.initial_capital = initial_capital
         self.commission_rate = commission_rate
         self.tax_rate = tax_rate
+        # 슬리피지 (per leg, 양수). config.backtest.slippage_pct → 기본 0.0015 (0.15%)
+        # mid-cap 시초가 체결 호가 한 단계 ~0.1~0.3% 가정
+        if slippage_pct is None:
+            try:
+                slippage_pct = float(getattr(get_config().backtest, "slippage_pct", 0.0015))
+            except Exception:
+                slippage_pct = 0.0015
+        self.slippage_pct = max(0.0, float(slippage_pct))
+        # Stop-loss 갭 보정 (음수 패널티 절댓값). 종가 -7% → T+1 시가 평균 추가 -1.5% 갭다운 가정
+        if gap_penalty_pct is None:
+            try:
+                gap_penalty_pct = float(getattr(get_config().backtest, "stop_loss_gap_penalty_pct", 0.015))
+            except Exception:
+                gap_penalty_pct = 0.015
+        self.gap_penalty_pct = max(0.0, float(gap_penalty_pct))
         self.max_positions = max_positions
         if stop_loss_pct is None:
             try:
@@ -86,26 +103,28 @@ class PortfolioBacktestEngine:
         return self.cash + pos_value
 
     def _buy(self, code: str, name: str, price: float, date: str, amount: float | None = None) -> bool:
-        """매수 실행"""
+        """매수 실행. price = 시가 raw, 실제 체결가 = price × (1 + slippage)."""
+        # 슬리피지 적용 — 매수는 호가 한 단계 위로 들어간다고 가정
+        effective_price = price * (1.0 + self.slippage_pct)
         if amount is None:
             total_value = self.cash + sum(
                 p.quantity * p.avg_price for p in self.positions.values()
             )
             amount = total_value / self.max_positions
 
-        quantity = int(amount / price)
+        quantity = int(amount / effective_price)
         if quantity <= 0:
             return False
 
-        cost = quantity * price
+        cost = quantity * effective_price
         commission = cost * self.commission_rate
         total_cost = cost + commission
 
         if total_cost > self.cash:
-            quantity = int((self.cash - 100) / (price * (1 + self.commission_rate)))
+            quantity = int((self.cash - 100) / (effective_price * (1 + self.commission_rate)))
             if quantity <= 0:
                 return False
-            cost = quantity * price
+            cost = quantity * effective_price
             commission = cost * self.commission_rate
             total_cost = cost + commission
 
@@ -114,27 +133,34 @@ class PortfolioBacktestEngine:
         if code in self.positions:
             pos = self.positions[code]
             total_qty = pos.quantity + quantity
-            pos.avg_price = (pos.avg_price * pos.quantity + price * quantity) / total_qty
+            pos.avg_price = (pos.avg_price * pos.quantity + effective_price * quantity) / total_qty
             pos.quantity = total_qty
         else:
             self.positions[code] = BacktestPosition(
                 code=code, name=name, quantity=quantity,
-                avg_price=price, entry_date=date,
+                avg_price=effective_price, entry_date=date,
             )
 
         self.trades.append(BacktestTrade(
             code=code, name=name, side="buy",
-            quantity=quantity, price=price, date=date,
+            quantity=quantity, price=effective_price, date=date,
         ))
         return True
 
-    def _sell(self, code: str, price: float, date: str) -> bool:
-        """매도 실행 (전량)"""
+    def _sell(self, code: str, price: float, date: str, is_stop_loss: bool = False) -> bool:
+        """매도 실행 (전량). price = 시가 raw, 실제 체결가 = price × (1 − slippage)
+        손절 (is_stop_loss=True) 시 추가 갭 패널티 적용 (T일 종가 트리거 → T+1 시가 갭다운 평균)."""
         if code not in self.positions:
             return False
 
+        # 슬리피지 — 매도는 호가 한 단계 아래로 빠진다고 가정
+        effective_price = price * (1.0 - self.slippage_pct)
+        # 손절 갭 패널티 — 한국시장 갭다운 평균 추정 (settings.yaml stop_loss_gap_penalty_pct, 기본 1.5%)
+        if is_stop_loss:
+            effective_price *= (1.0 - self.gap_penalty_pct)
+
         pos = self.positions[code]
-        revenue = pos.quantity * price
+        revenue = pos.quantity * effective_price
         commission = revenue * self.commission_rate
         tax = revenue * self.tax_rate
         net_revenue = revenue - commission - tax
@@ -142,7 +168,7 @@ class PortfolioBacktestEngine:
         self.cash += net_revenue
 
         pnl = net_revenue - pos.quantity * pos.avg_price
-        pnl_pct = (price / pos.avg_price - 1) * 100
+        pnl_pct = (effective_price / pos.avg_price - 1) * 100
 
         # 보유일수 계산
         try:
@@ -154,7 +180,7 @@ class PortfolioBacktestEngine:
 
         self.trades.append(BacktestTrade(
             code=code, name=pos.name, side="sell",
-            quantity=pos.quantity, price=price, date=date,
+            quantity=pos.quantity, price=effective_price, date=date,
             pnl=pnl, pnl_pct=pnl_pct, holding_days=holding_days,
         ))
 
@@ -203,14 +229,15 @@ class PortfolioBacktestEngine:
         current_pool = []
 
         # T일 시그널 → T+1일 시가 체결을 위한 주문 큐
-        pending_orders: list[tuple[str, str, str]] = []  # (code, name, side)
+        # 4-tuple: (code, name, side, is_stop_loss) — stop_loss 매도 시 갭 패널티 적용
+        pending_orders: list[tuple[str, str, str, bool]] = []
 
         for i, date in enumerate(all_dates):
             # ── 1. 전일 시그널의 주문을 당일 시가로 체결 ──
             if pending_orders:
                 stopped_by_pending: set[str] = set()
                 any_executed = False
-                for code, name, side in pending_orders:
+                for code, name, side, is_stop in pending_orders:
                     exec_price = self._get_open_cached(code, date)
                     if exec_price <= 0:
                         continue
@@ -220,7 +247,7 @@ class PortfolioBacktestEngine:
                                 any_executed = True
                     elif side == "sell":
                         if code in self.positions:
-                            if self._sell(code, exec_price, date):
+                            if self._sell(code, exec_price, date, is_stop_loss=is_stop):
                                 stopped_by_pending.add(code)
                                 any_executed = True
                 pending_orders = []
@@ -241,13 +268,13 @@ class PortfolioBacktestEngine:
                 # 퇴출 종목은 모든 전략에서 T+1 SELL 강제 (풀 diff 기반)
                 for code in old_set - new_set:
                     if code in self.positions:
-                        pending_orders.append((code, "", "sell"))
+                        pending_orders.append((code, "", "sell", False))
 
                 # 신규 편입 자동 BUY 는 commit_pool 기반 전략(factor_only)만 수행.
                 # 타이밍 전략은 generate_signal 이 진입을 결정한다.
                 if hasattr(strategy, "commit_pool"):
                     for code in new_set - old_set:
-                        pending_orders.append((code, "", "buy"))
+                        pending_orders.append((code, "", "buy", False))
                     strategy.commit_pool()
 
                 current_pool = new_pool
@@ -262,7 +289,7 @@ class PortfolioBacktestEngine:
                 pos = self.positions[code]
                 pnl_pct = close_price / pos.avg_price - 1
                 if pnl_pct <= stop_loss_threshold:
-                    pending_orders.append((code, pos.name, "sell"))
+                    pending_orders.append((code, pos.name, "sell", True))
                     stopped_today.add(code)
 
             # ── 4. 일일 타이밍 시그널: T일 데이터로 판단 → T+1 체결 예약 ──
@@ -291,7 +318,7 @@ class PortfolioBacktestEngine:
                         code, signal.stock_name, "BUY", signal.reason, df_until, date,
                     ):
                         continue
-                    pending_orders.append((code, signal.stock_name, "buy"))
+                    pending_orders.append((code, signal.stock_name, "buy", False))
 
                 elif signal.signal == Signal.SELL and code in self.positions:
                     # SELL 은 검증기에서도 항상 확정되지만 일관성을 위해 호출
@@ -299,7 +326,7 @@ class PortfolioBacktestEngine:
                         code, signal.stock_name, "SELL", signal.reason, df_until, date,
                     ):
                         continue
-                    pending_orders.append((code, "", "sell"))
+                    pending_orders.append((code, "", "sell", False))
 
             # ── 5. 전략-엔진 포지션 동기화 (RL 전략 등) ──
             # 시그널 생성 중 전략이 옵티미스틱하게 추가한 엔트리 정리 +

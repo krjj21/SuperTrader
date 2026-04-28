@@ -131,6 +131,12 @@ class RLParams(BaseModel):
     sentiment_source: str = "off"
     # Hybrid: XGB SELL 신뢰도 ≥ threshold 일 때만 RL 보류 무시 매도 허용
     xgb_sell_confidence_threshold: float = 0.60
+    # Hybrid: XGB BUY 신뢰도 ≥ threshold 일 때만 진입 허용 (false positive 차단)
+    # 잘못된 매수 = 즉시 손실, 잘못된 보류 = 기회 비용에 그쳐 BUY 가 더 보수적이어야 함
+    xgb_buy_confidence_threshold: float = 0.55
+    # Ensemble: N개 시드로 학습 후 median Sharpe 모델 채택. 빈 리스트 → 단일 시드(42)
+    # GPU 시간 N배 비용으로 시드 변동 ±0.3~0.5 회귀 위험 큰 폭 감소
+    ensemble_seeds: list[int] = []
 
 
 class TimingConfig(BaseModel):
@@ -186,6 +192,11 @@ class BacktestConfig(BaseModel):
     initial_capital: int = 100_000_000
     commission_rate: float = 0.00015
     tax_rate: float = 0.0023
+    # 슬리피지 (per leg) — mid-cap 시초가 호가 한 단계 ~0.1~0.3% 가정
+    slippage_pct: float = 0.0015
+    # 손절 갭다운 패널티 — 종가 -7% 트리거 → T+1 시가 평균 추가 갭다운
+    # 한국시장 갭다운 평균 ~1.5% (보수적 가정)
+    stop_loss_gap_penalty_pct: float = 0.015
     # walk-forward: 백테스트 중에 모델을 새로 학습해야 할 때
     # 전체 OHLCV 의 앞 train_ratio 만 학습에 사용. (1.0 이면 기존처럼 전체)
     train_ratio: float = 0.5

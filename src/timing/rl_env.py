@@ -189,19 +189,28 @@ class TradingEnv:
             cost = self.commission_rate + self.tax_rate
             realized_pnl = (current_price - self._entry_price) / self._entry_price
 
-            # SELL 보너스/페널티:
-            # - 손절(-3% 이하): 보너스 (손실 확대 방지 학습)
-            # - 적정 익절(+3~10%): 보너스 (수익 실현 학습)
-            # - 조기 익절(+10% 이상): 페널티 (추세 추종 학습)
-            # - 소폭 구간(-3~+3%): 중립
+            # SELL 보너스/페널티 v2 (2026-04-28 재설계):
+            # 이전 v1 은 +3~10% 익절 보상(0.3×pnl)이 +10% 페널티(0.2×pnl)보다 정량적으로
+            # 더 매력적이라 *추세주를 일찍 자르는 정책* 이 학습됨.
+            # v2: 추세 추종을 진짜로 학습시키기 위해 |페널티| ≫ |보상| 로 재조정.
+            # - 손절(-3% 이하): 보너스 유지 (손실 확대 방지 학습)
+            # - 미세 익절(+0~3%): 페널티 (잡 trades, 마찰비용 누수)
+            # - 적정 익절(+3~10%): 작은 보너스 (수익 실현은 허용하되 강한 인센티브 X)
+            # - 조기 익절(+10% 이상): 큰 페널티 (추세 추종 강제)
             if realized_pnl < -0.03:
-                sell_bonus = 0.5 * abs(realized_pnl)
+                sell_bonus = 0.5 * abs(realized_pnl)         # 손절 보상 유지
+            elif 0.0 <= realized_pnl < 0.03:
+                sell_bonus = -0.15 * realized_pnl            # 미세익절 페널티 (신규)
             elif 0.03 <= realized_pnl <= 0.10:
-                sell_bonus = 0.3 * realized_pnl      # 적정 구간 익절 보상
+                sell_bonus = 0.10 * realized_pnl             # 보상 0.3 → 0.10 약화
             elif realized_pnl > 0.10:
-                sell_bonus = -0.2 * realized_pnl      # 대폭 수익 조기 청산 페널티
+                sell_bonus = -0.6 * realized_pnl             # 페널티 0.2 → 0.6 강화
             else:
                 sell_bonus = 0.0
+            # 정량 비교 (예시):
+            #   +5% 익절: bonus = 0.005 (이전 0.015) → 인센티브 ↓
+            #   +15% 추세 청산: penalty = -0.090 (이전 -0.030) → 3× 강한 억제
+            #   → +5% 익절 < +15% 보유 유지가 명백히 유리
 
             # Trading-frequency penalty: min_holding_days 미만 보유 후 SELL 시 추가 페널티
             # 손절(-3% 이하)은 면제 (손실 확대 방지가 우선)

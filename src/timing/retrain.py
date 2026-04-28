@@ -206,15 +206,24 @@ def _retrain_rl_model(
     이 실제 portfolio simulation 과 분리되어 있어 overfit 검출 불가했던 결함을 막는다.
     """
     from src.timing.rl_trainer import (
-        train_rl_model, evaluate_rl_agent, evaluate_rl_portfolio,
+        train_rl_model, train_rl_ensemble, evaluate_rl_agent, evaluate_rl_portfolio,
     )
     from src.timing.rl_agent import RLTimingModel
+    from src.config import get_config
 
     current_path = Path(current_model_path)
 
-    # 1. 새 모델 학습 (임시 경로)
+    # 1. 새 모델 학습 (임시 경로) — ensemble_seeds 설정 시 N개 시드 학습 후 median 채택
     tmp_path = str(current_path.with_suffix(".tmp.pt"))
-    result = train_rl_model(ohlcv_dict, save_path=tmp_path, val_ratio=val_ratio)
+    seeds = list(getattr(get_config().timing.rl, "ensemble_seeds", []) or [])
+    if len(seeds) >= 2:
+        logger.info(f"Ensemble 학습 활성화: seeds={seeds}")
+        result = train_rl_ensemble(
+            ohlcv_dict, save_path=tmp_path, val_ratio=val_ratio,
+            seeds=seeds,
+        )
+    else:
+        result = train_rl_model(ohlcv_dict, save_path=tmp_path, val_ratio=val_ratio)
 
     if "error" in result:
         return {"error": result["error"], "replaced": False}

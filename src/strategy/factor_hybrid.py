@@ -35,6 +35,7 @@ class FactorHybridStrategy(BaseStrategy):
         self._buy_threshold = rl_cfg.buy_action_threshold
         self._sell_threshold = rl_cfg.sell_action_threshold
         self._xgb_sell_threshold = float(getattr(rl_cfg, "xgb_sell_confidence_threshold", 0.60))
+        self._xgb_buy_threshold = float(getattr(rl_cfg, "xgb_buy_confidence_threshold", 0.55))
 
         self._pool: set[str] = set()
         # 포지션 추적 (RL 레이어용)
@@ -151,8 +152,25 @@ class FactorHybridStrategy(BaseStrategy):
                 ),
             )
 
-        # BUY: XGBoost BUY + RL BUY → 실행 (두 모델 동의)
+        # BUY: XGBoost BUY + XGB 고신뢰 + RL BUY → 실행 (3중 합의)
+        # 2026-04-28: BUY 에 xgb_buy_confidence_threshold 추가. 잘못된 매수는 즉시 손실,
+        # 잘못된 보류는 기회 비용에 그치므로 BUY 가 SELL 보다 더 엄격해야 한다.
         if ml_signal == 1 and not holding:
+            xgb_buy_prob = self.ml_predictor.predict_proba_last(df, label=1)
+            # predict_proba 미지원 시 None → 기존 동작(통과) 유지 (호환성)
+            buy_conf_pass = xgb_buy_prob is None or xgb_buy_prob >= self._xgb_buy_threshold
+            buy_conf_str = f"{xgb_buy_prob:.2f}" if xgb_buy_prob is not None else "n/a"
+
+            if not buy_conf_pass:
+                # XGB BUY 시그널이지만 신뢰도 미달 → HOLD (false positive 차단)
+                return TradeSignal(
+                    signal=Signal.HOLD, stock_code=stock_code, price=price,
+                    reason=(
+                        f"Hybrid HOLD (XGB 저신뢰 conf={buy_conf_str} "
+                        f"< {self._xgb_buy_threshold:.2f} — 진입 보류)"
+                    ),
+                )
+
             if rl_signal == 1:
                 from datetime import datetime
                 entry_date = self._current_date or datetime.now().strftime("%Y%m%d")
@@ -163,13 +181,16 @@ class FactorHybridStrategy(BaseStrategy):
                 return TradeSignal(
                     signal=Signal.BUY, stock_code=stock_code, stock_name=stock_name,
                     price=price, strength=0.85,
-                    reason="Hybrid BUY (XGB alpha + RL timing 동의)",
+                    reason=f"Hybrid BUY (XGB conf={buy_conf_str} + RL 동의)",
                 )
             else:
-                # XGBoost BUY지만 RL이 거부 → HOLD (RL이 리스크 차단)
+                # XGB 고신뢰 BUY지만 RL이 거부 → HOLD (RL이 타이밍 리스크 차단)
                 return TradeSignal(
                     signal=Signal.HOLD, stock_code=stock_code, price=price,
-                    reason=f"Hybrid HOLD (XGB BUY, RL 거부 — 타이밍 부적절)",
+                    reason=(
+                        f"Hybrid HOLD (XGB BUY conf={buy_conf_str}, RL 거부 — "
+                        f"타이밍 부적절)"
+                    ),
                 )
 
         return TradeSignal(signal=Signal.HOLD, stock_code=stock_code, price=price)

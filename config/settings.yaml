@@ -36,7 +36,10 @@ factors:
 # ── 타이밍 모델 설정 ──
 timing:
   model: "xgboost"                # none, macd, kdj, decision_tree, xgboost, lightgbm, lstm, transformer
-  forward_days: 5                 # 라벨 생성용 미래 수익률 기간
+  forward_days: 5                 # 라벨 생성용 미래 수익률 기간 (현재 5일)
+  # NOTE: 실제 보유 기간은 5~22일 (RL min_holding=5 + 격주 리밸 14일)
+  # forward_days 를 10 으로 늘리면 holding-period 와 매칭되지만 모든 ML 모델 재학습 필요.
+  # 별도 라운드에서 실험 (#5 권장).
   buy_threshold: 0.02             # +2% 이상이면 매수 라벨
   sell_threshold: -0.02           # -2% 이하면 매도 라벨
 
@@ -104,6 +107,10 @@ timing:
     sentiment_source: "off"   # off/news/mock/xgb_proxy
     # Hybrid: XGB SELL 신뢰도 이 임계값 이상일 때만 RL 보류 무시 매도
     xgb_sell_confidence_threshold: 0.60
+    # Hybrid: XGB BUY 신뢰도 이상일 때만 진입 (false positive 차단, 2026-04-28 추가)
+    xgb_buy_confidence_threshold: 0.55
+    # Ensemble: 시드 3개 median Sharpe 모델 채택 (회귀 방지). 비활성: []
+    ensemble_seeds: [42, 1, 2]
 
 # ── Regime Detector (시장 국면) ──
 # Phase 1+2: 라벨링 + 팩터/포지션 사이즈 모듈레이션. RL state 통합은 별도 라운드.
@@ -150,6 +157,8 @@ backtest:
   initial_capital: 100_000_000     # 1억
   commission_rate: 0.00015         # 0.015%
   tax_rate: 0.0023                 # 매도세 0.23%
+  slippage_pct: 0.0015             # per leg 0.15% (mid-cap 시초가 호가 한 단계)
+  stop_loss_gap_penalty_pct: 0.015 # 손절 트리거 시 T+1 시가 추가 갭다운 1.5% (보수적)
   train_ratio: 0.5                 # walk-forward: 앞 50% 학습, 뒤 50% 테스트 (1.0 = 전체 in-sample)
 
 # ── 데이터베이스 ──

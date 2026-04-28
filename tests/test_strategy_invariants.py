@@ -54,7 +54,7 @@ class FirstDayBuyStrategy(BaseStrategy):
 class StrategyInvariantTests(unittest.TestCase):
     def test_backtest_executes_signal_on_next_day_open(self) -> None:
         strategy = FirstDayBuyStrategy()
-        engine = PortfolioBacktestEngine(initial_capital=1_000_000, max_positions=5)
+        engine = PortfolioBacktestEngine(initial_capital=1_000_000, max_positions=5, slippage_pct=0.0, gap_penalty_pct=0.0)
         ohlcv = {
             "AAA": _make_ohlcv(
                 ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04"],
@@ -79,7 +79,7 @@ class StrategyInvariantTests(unittest.TestCase):
 
     def test_backtest_force_sells_when_stock_leaves_pool(self) -> None:
         strategy = FirstDayBuyStrategy()
-        engine = PortfolioBacktestEngine(initial_capital=1_000_000, max_positions=5)
+        engine = PortfolioBacktestEngine(initial_capital=1_000_000, max_positions=5, slippage_pct=0.0, gap_penalty_pct=0.0)
         ohlcv = {
             "AAA": _make_ohlcv(
                 ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"],
@@ -112,10 +112,13 @@ class StrategyInvariantTests(unittest.TestCase):
         strategy.ml_predictor = Mock()
         strategy.rl_predictor = Mock()
         strategy.ml_predictor.predict.return_value = 1
+        # XGB BUY confidence — invariant test 는 신뢰도 통과로 가정 (None = legacy 호환)
+        strategy.ml_predictor.predict_proba_last.return_value = None
         strategy.rl_predictor.predict_with_position.return_value = 0
         strategy._buy_threshold = 0.07
         strategy._sell_threshold = 0.06
         strategy._xgb_sell_threshold = 0.60
+        strategy._xgb_buy_threshold = 0.55
         strategy._positions = {}
         strategy._pool = {"AAA"}
         strategy._current_date = None

@@ -308,6 +308,7 @@ def train_rl_model(
     sentiment_map: dict[str, dict[str, float]] | None = None,
     run_name: str | None = None,
     sentiment_source: str = "off",
+    seed: int = 42,
 ) -> dict:
     """PPO/SAPPO 로 RL 타이밍 모델을 학습합니다.
 
@@ -316,7 +317,16 @@ def train_rl_model(
         sentiment_map: {code: {YYYYMMDD: score}} — sentiment_lambda > 0 일 때 사용.
         run_name: DB 기록용 식별자.
         sentiment_source: "off" / "news" / "mock" / "xgb_proxy" 등 라벨링용.
+        seed: torch/numpy seed. 시드 변동 ±0.3~0.5 Sharpe 흔함 — ensemble 위해 노출.
     """
+    # 시드 고정 (PPO 정책 초기화 + rollout 샘플링 결정성)
+    import random
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
     config = get_config()
     rl_config = config.timing.rl
 
@@ -596,3 +606,94 @@ def train_rl_model(
         "n_samples": sum(len(df) for df in train_dict.values()),
         "sentiment_lambda": sentiment_lambda,
     }
+
+
+def train_rl_ensemble(
+    ohlcv_dict: dict[str, pd.DataFrame],
+    save_path: str = "models/rl_timing.pt",
+    val_ratio: float = 0.2,
+    sentiment_lambda: float = 0.0,
+    sentiment_map: dict[str, dict[str, float]] | None = None,
+    sentiment_source: str = "off",
+    seeds: list[int] | None = None,
+) -> dict:
+    """N개 시드로 PPO 모델을 학습 후 *median Sharpe* 모델을 채택한다.
+
+    배경 (2026-04-28 코드 리뷰): financial RL 에서 시드 간 Sharpe 분산 ±0.3~0.5 흔함.
+    Triple gate 는 잘못된 모델 *교체* 를 막지만 *시드 변동* 자체는 줄이지 않는다.
+    Ensemble = 시드 N개 학습 → 정렬 → 중간값 모델 채택. GPU 시간 N배 비용으로
+    회귀 위험 큰 폭 감소.
+
+    Args:
+        seeds: 학습할 시드 리스트. None 또는 단일 원소 → train_rl_model 단독 호출.
+    """
+    if seeds is None or len(seeds) <= 1:
+        single_seed = (seeds[0] if seeds else 42)
+        return train_rl_model(
+            ohlcv_dict, save_path=save_path, val_ratio=val_ratio,
+            sentiment_lambda=sentiment_lambda, sentiment_map=sentiment_map,
+            sentiment_source=sentiment_source, seed=single_seed,
+        )
+
+    import tempfile, os
+    candidates: list[tuple[int, str, dict]] = []  # (seed, tmp_path, result)
+    for i, seed in enumerate(seeds, 1):
+        logger.info(f"[Ensemble {i}/{len(seeds)}] seed={seed} 학습 시작")
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=f".seed{seed}.pt", delete=False,
+            dir=str(Path(save_path).parent),
+        )
+        tmp.close()
+        try:
+            result = train_rl_model(
+                ohlcv_dict, save_path=tmp.name, val_ratio=val_ratio,
+                sentiment_lambda=sentiment_lambda, sentiment_map=sentiment_map,
+                sentiment_source=sentiment_source, seed=seed,
+            )
+            if "error" in result:
+                logger.warning(f"[Ensemble seed={seed}] 학습 실패: {result['error']}")
+                try: os.unlink(tmp.name)
+                except Exception: pass
+                continue
+            candidates.append((seed, tmp.name, result))
+            logger.info(
+                f"[Ensemble seed={seed}] sharpe={result.get('sharpe',0):.3f}, "
+                f"return={result.get('total_return',0):.2f}%"
+            )
+        except Exception as e:
+            logger.error(f"[Ensemble seed={seed}] 학습 예외: {e}")
+            try: os.unlink(tmp.name)
+            except Exception: pass
+
+    if not candidates:
+        return {"error": "all_seeds_failed"}
+
+    # Sharpe 기준 정렬 후 중간값 선택 (홀수 → 정확한 median, 짝수 → lower median)
+    candidates.sort(key=lambda x: x[2].get("sharpe", -999.0))
+    median_idx = len(candidates) // 2
+    if len(candidates) > 1 and len(candidates) % 2 == 0:
+        median_idx -= 1  # lower median (보수적)
+    chosen_seed, chosen_tmp, chosen_result = candidates[median_idx]
+
+    sharpes = [r.get("sharpe", 0) for _, _, r in candidates]
+    logger.info(
+        f"[Ensemble] {len(candidates)}/{len(seeds)} seeds 성공, "
+        f"Sharpe 분포 = {[f'{s:.3f}' for s in sharpes]} → median seed={chosen_seed} 채택"
+    )
+
+    # 채택된 모델을 save_path 로 이동
+    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+    if Path(save_path).exists():
+        Path(save_path).unlink()
+    Path(chosen_tmp).rename(save_path)
+
+    # 나머지 시드 임시 파일 정리
+    for s, tmp_p, _ in candidates:
+        if s != chosen_seed:
+            try: Path(tmp_p).unlink(missing_ok=True)
+            except Exception: pass
+
+    chosen_result["ensemble_seeds"] = [s for s, _, _ in candidates]
+    chosen_result["ensemble_sharpes"] = sharpes
+    chosen_result["chosen_seed"] = chosen_seed
+    return chosen_result
