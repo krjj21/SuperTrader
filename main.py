@@ -1152,9 +1152,9 @@ def run_retrain(model_type: str):
     from src.data.market_data import get_universe, get_ohlcv_batch
     from src.timing.retrain import retrain_model
 
-    # 최근 5년 데이터 (약세장 포함, distribution shift 완화)
+    # 최근 3년 데이터 (약세장 일부 포함, OOM 회피 — 5년은 batch 88K로 GPU 6GB 한계 초과)
     end = datetime.now().strftime("%Y%m%d")
-    start = (datetime.now() - timedelta(days=1825)).strftime("%Y%m%d")
+    start = (datetime.now() - timedelta(days=1095)).strftime("%Y%m%d")
 
     universe = get_universe()
     codes = universe["code"].tolist()[:100]

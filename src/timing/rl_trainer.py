@@ -260,8 +260,7 @@ def evaluate_rl_portfolio(
     tmp.close()
     try:
         agent.save(tmp.name)
-        # XGBoost는 dummy 경로 (FactorRLStrategy 단독 사용 시 ml_model_path 불필요)
-        strategy = FactorRLStrategy(rl_model_path=tmp.name)
+        strategy = FactorRLStrategy(model_path=tmp.name)
     except Exception as e:
         try:
             os.unlink(tmp.name)
