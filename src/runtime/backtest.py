@@ -82,6 +82,19 @@ def run_backtest(
     logger.info("Step 5: ML 모델 학습")
     model_paths = _train_models_if_needed(ohlcv_dict)
 
+    # 5-1. Walk-forward OOS slice: train_ratio < 1.0 일 때 학습 구간을 백테스트에서 제외.
+    # 이 단계가 없으면 동일 데이터 학습→평가로 in-sample leakage 가 metrics 를 왜곡한다.
+    train_ratio = float(getattr(config.backtest, "train_ratio", 1.0))
+    if train_ratio < 1.0 and len(rebalance_dates) > 4:
+        cutoff_idx = int(len(rebalance_dates) * train_ratio)
+        cutoff_date = rebalance_dates[cutoff_idx]
+        rebalance_dates = rebalance_dates[cutoff_idx:]
+        pool_history = {d: p for d, p in pool_history.items() if d in rebalance_dates}
+        logger.info(
+            f"OOS 백테스트 슬라이스: cutoff={cutoff_date}, "
+            f"{len(rebalance_dates)}회 리밸런싱 (전체 학습 구간 제외)"
+        )
+
     # 6. 전략 비교 실행
     logger.info("Step 6: 전략 비교 백테스트 실행")
     comparison = run_strategy_comparison(
@@ -326,7 +339,7 @@ def _train_models_if_needed(ohlcv_dict: dict) -> dict[str, str]:
     model_dir.mkdir(exist_ok=True)
 
     model_paths = {}
-    models_to_train = ["decision_tree", "xgboost", "rl"]
+    models_to_train = ["decision_tree", "xgboost", "transformer", "rl"]
 
     train_ratio = float(getattr(config.backtest, "train_ratio", 1.0))
     train_ohlcv = _split_ohlcv_prefix(ohlcv_dict, train_ratio) if train_ratio < 1.0 else ohlcv_dict

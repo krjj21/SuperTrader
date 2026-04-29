@@ -85,9 +85,9 @@ timing:
     nhead: 4
     num_layers: 2
     dropout: 0.1
-    learning_rate: 0.0005
+    learning_rate: 0.001    # Tier 1: batch 64→256 (4x), sqrt LR scaling 5e-4→1e-3
     epochs: 100
-    batch_size: 64
+    batch_size: 256         # Tier 1: 64→256, num_workers=4 + pin_memory + fused AdamW
 
   # PPO RL
   rl:

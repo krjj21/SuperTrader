@@ -30,6 +30,9 @@ class TimingPredictor:
             1 (BUY), 0 (HOLD), -1 (SELL)
         """
         features = build_features(df)
+        seq_len = getattr(self.model, "sequence_length", None)
+        if seq_len and len(features) > seq_len:
+            features = features.iloc[-seq_len:]
         predictions = self.model.predict(features)
         return int(predictions.iloc[-1])
 
@@ -69,6 +72,9 @@ class TimingPredictor:
             return None
         try:
             features = build_features(df)
+            seq_len = getattr(self.model, "sequence_length", None)
+            if seq_len and len(features) > seq_len:
+                features = features.iloc[-seq_len:]
             proba = self.model.predict_proba(features)
             if label not in proba.columns:
                 return None

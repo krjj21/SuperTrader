@@ -182,7 +182,16 @@ class TransformerTimingModel:
         else:
             dataset = TimeSeriesDataset(X_norm, y_mapped, self.sequence_length)
             cost_aware = False
-        loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
+        loader = DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            num_workers=4,
+            pin_memory=(self.device.type == "cuda"),
+            persistent_workers=True,
+            prefetch_factor=2,
+            drop_last=True,
+        )
 
         self.model = TransformerClassifier(
             input_size=X_clean.shape[1],
@@ -193,14 +202,23 @@ class TransformerTimingModel:
         ).to(self.device)
 
         class_counts = np.bincount(y_mapped, minlength=3).astype(float) + 1
-        class_weights = torch.FloatTensor(1.0 / class_counts).to(self.device)
+        # sklearn 'balanced' 방식: weight 평균이 1.0 이 되도록 normalize. 그렇지 않으면
+        # weighted_ce 가 ~1e-5 scale 로 작아져 cost_pen (~2e-3) 에 압도되며, 모델이
+        # BUY/SELL 확률 → 0 으로 몰려 HOLD-only degenerate solution 으로 수렴함.
+        n_total = class_counts.sum()
+        n_classes = len(class_counts)
+        class_weights = torch.FloatTensor(n_total / (n_classes * class_counts)).to(self.device)
 
         # cost-aware 모드면 reduction='none' (per-sample weighting), 아니면 표준 CE
         if cost_aware:
             criterion = nn.CrossEntropyLoss(weight=class_weights, reduction="none")
         else:
             criterion = nn.CrossEntropyLoss(weight=class_weights)
-        optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.learning_rate)
+        optimizer = torch.optim.AdamW(
+            self.model.parameters(),
+            lr=self.learning_rate,
+            fused=(self.device.type == "cuda"),
+        )
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs)
 
         best_loss = float("inf")
@@ -214,16 +232,17 @@ class TransformerTimingModel:
 
         for epoch in range(self.epochs):
             self.model.train()
-            total_loss = 0
+            loss_sum = torch.zeros(1, device=self.device)
+            n_batches = 0
             for batch in loader:
                 if cost_aware:
                     batch_x, batch_y, batch_fr = batch
-                    batch_fr = batch_fr.to(self.device)
+                    batch_fr = batch_fr.to(self.device, non_blocking=True)
                 else:
                     batch_x, batch_y = batch
                     batch_fr = None
-                batch_x = batch_x.to(self.device)
-                batch_y = batch_y.to(self.device)
+                batch_x = batch_x.to(self.device, non_blocking=True)
+                batch_y = batch_y.to(self.device, non_blocking=True)
 
                 optimizer.zero_grad()
                 output = self.model(batch_x)
@@ -247,10 +266,11 @@ class TransformerTimingModel:
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 optimizer.step()
-                total_loss += loss.item()
+                loss_sum += loss.detach()
+                n_batches += 1
 
             scheduler.step()
-            avg_loss = total_loss / len(loader)
+            avg_loss = (loss_sum / max(n_batches, 1)).item()
 
             if avg_loss < best_loss:
                 best_loss = avg_loss
@@ -296,6 +316,34 @@ class TransformerTimingModel:
 
         return predictions
 
+    def predict_proba(self, X: pd.DataFrame) -> pd.DataFrame:
+        """클래스별 softmax 확률 반환. XGBoost 와 동일 인터페이스
+        (columns=[-1, 0, 1] = SELL/HOLD/BUY) 로 hybrid 신뢰도 게이팅 호환."""
+        if self.model is None:
+            raise RuntimeError("모델이 학습되지 않았습니다")
+
+        X_aligned = X[self.feature_names].copy()
+        X_vals = X_aligned.values.astype(np.float32)
+        X_norm = self._normalize(X_vals)
+        X_norm = np.nan_to_num(X_norm, nan=0.0)
+
+        proba = pd.DataFrame(0.0, index=X.index, columns=[-1, 0, 1])
+
+        self.model.eval()
+        with torch.no_grad():
+            for i in range(self.sequence_length - 1, len(X_norm)):
+                seq = torch.FloatTensor(
+                    X_norm[i - self.sequence_length + 1:i + 1]
+                ).unsqueeze(0).to(self.device)
+                output = self.model(seq)
+                p = torch.softmax(output, dim=1).cpu().numpy()[0]
+                # p[0]=SELL(label 0), p[1]=HOLD(1), p[2]=BUY(2) → columns [-1, 0, 1]
+                proba.iat[i, 0] = float(p[0])
+                proba.iat[i, 1] = float(p[1])
+                proba.iat[i, 2] = float(p[2])
+
+        return proba
+
     def save(self, path: str) -> None:
         torch.save({
             "model_state": self.model.state_dict() if self.model else None,
@@ -315,6 +363,11 @@ class TransformerTimingModel:
         self._mean = data["mean"]
         self._std = data["std"]
         cfg = data["config"]
+        self.sequence_length = cfg["sequence_length"]
+        self.d_model = cfg["d_model"]
+        self.nhead = cfg["nhead"]
+        self.num_layers = cfg["num_layers"]
+        self.dropout = cfg["dropout"]
         self.model = TransformerClassifier(
             input_size=cfg["input_size"], d_model=cfg["d_model"],
             nhead=cfg["nhead"], num_layers=cfg["num_layers"],

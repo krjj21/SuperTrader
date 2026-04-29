@@ -75,6 +75,16 @@ def run_strategy_comparison(
             rl_model_path=model_paths["rl"],
         )
 
+    # Hybrid(Transformer + RL) — XGB 자리에 transformer alpha layer
+    if "transformer" in model_paths and "rl" in model_paths:
+        from src.strategy.factor_hybrid import FactorHybridStrategy
+        strategies["factor_hybrid_transformer"] = FactorHybridStrategy(
+            ml_model_path=model_paths["transformer"],
+            rl_model_path=model_paths["rl"],
+            ml_model_type="transformer",
+            name="factor_hybrid_transformer",
+        )
+
     # 특정 전략만 실행
     if only_strategies:
         strategies = {k: v for k, v in strategies.items() if k in only_strategies}

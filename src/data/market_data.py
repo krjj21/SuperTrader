@@ -327,6 +327,16 @@ def get_ohlcv(
     for col in ["open", "high", "low", "close", "volume"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # 거래정지일 처리: FDR 은 거래정지일을 O=H=L=0, close=직전 종가, volume=0 으로 반환.
+    # 이대로 두면 calc_kdj 등 (highest_high - lowest_low) 분모가 0 이 돼 RSV 가 ~1e17 로 폭발해
+    # downstream 정규화 std 를 오염시킨다. close 값으로 OHL 을 평탄화 (가격 변동 없음 = 거래정지 의미).
+    halt = (df["open"] == 0) & (df["high"] == 0) & (df["low"] == 0) & (df["close"] > 0)
+    if halt.any():
+        close_vals = df.loc[halt, "close"]
+        df.loc[halt, "open"] = close_vals
+        df.loc[halt, "high"] = close_vals
+        df.loc[halt, "low"] = close_vals
+
     df = df.dropna().reset_index(drop=True)
     return df
 

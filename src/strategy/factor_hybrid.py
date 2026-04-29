@@ -21,13 +21,20 @@ from src.strategy._position_utils import business_days_held, resolve_buy_date
 class FactorHybridStrategy(BaseStrategy):
     """XGBoost(알파) + RL(리스크 필터) Hybrid 전략"""
 
-    def __init__(self, ml_model_path: str, rl_model_path: str, params: dict | None = None):
-        super().__init__(name="factor_hybrid", params=params)
+    def __init__(
+        self,
+        ml_model_path: str,
+        rl_model_path: str,
+        params: dict | None = None,
+        ml_model_type: str = "xgboost",
+        name: str = "factor_hybrid",
+    ):
+        super().__init__(name=name, params=params)
         from src.timing.predictor import TimingPredictor
         from src.config import get_config
 
-        # Alpha Layer: XGBoost
-        self.ml_predictor = TimingPredictor("xgboost", ml_model_path)
+        # Alpha Layer: ml_model_type (xgboost 또는 transformer)
+        self.ml_predictor = TimingPredictor(ml_model_type, ml_model_path)
 
         # RL Layer: PPO (리스크 필터)
         self.rl_predictor = TimingPredictor("rl", rl_model_path)

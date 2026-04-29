@@ -28,6 +28,19 @@ def run_train(model_type: str) -> None:
 
     ohlcv_dict = get_ohlcv_batch(codes, start, end)
 
+    # Walk-forward 학습: train_ratio prefix 만 사용 (data leakage 방지).
+    # 이 슬라이스가 없으면 백테스트가 학습 구간을 그대로 재생해 in-sample 점수가
+    # 비현실적으로 부풀어 오른다 (관측 사례: factor_transformer Sharpe 5.6, return +2344%).
+    train_ratio = float(getattr(config.backtest, "train_ratio", 1.0))
+    if train_ratio < 1.0:
+        from src.runtime.backtest import _split_ohlcv_prefix
+        before = len(ohlcv_dict)
+        ohlcv_dict = _split_ohlcv_prefix(ohlcv_dict, train_ratio)
+        logger.info(
+            f"학습 데이터 walk-forward prefix: 전체의 {train_ratio*100:.0f}% "
+            f"({len(ohlcv_dict)}/{before}종목 통과)"
+        )
+
     ext = ".pkl" if model_type in ("decision_tree", "xgboost", "lightgbm") else ".pt"
     save_path = f"models/{model_type}_timing{ext}"
 
