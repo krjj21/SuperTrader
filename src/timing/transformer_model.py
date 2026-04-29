@@ -10,10 +10,49 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+import torch.nn.functional as F
+from torch.utils.data import DataLoader, Dataset
 from loguru import logger
 
 from src.timing.lstm_model import TimeSeriesDataset
+
+
+class PnLAwareDataset(Dataset):
+    """시계열 시퀀스 + (선택적) forward_return 함께 반환.
+
+    Momentum Transformer paper (Wood et al. 2021) 의 transaction-cost-aware
+    loss 입력. forward_returns 가 None 이면 기존 TimeSeriesDataset 와 동일 동작
+    (sample_weight = 1, no transaction cost penalty).
+    """
+    def __init__(
+        self,
+        X: np.ndarray,
+        y: np.ndarray,
+        seq_length: int,
+        forward_returns: np.ndarray | None = None,
+    ):
+        self.X = torch.FloatTensor(X)
+        self.y = torch.LongTensor(y)
+        self.seq_length = seq_length
+        if forward_returns is not None:
+            # NaN → 0 (학습 영향 없게)
+            fr = np.nan_to_num(forward_returns, nan=0.0).astype(np.float32)
+            self.fr = torch.FloatTensor(fr)
+        else:
+            self.fr = None
+
+    def __len__(self):
+        return len(self.X) - self.seq_length + 1
+
+    def __getitem__(self, idx):
+        x_seq = self.X[idx:idx + self.seq_length]
+        target_idx = idx + self.seq_length - 1
+        y_label = self.y[target_idx]
+        if self.fr is not None:
+            fr_val = self.fr[target_idx]
+        else:
+            fr_val = torch.tensor(0.0)
+        return x_seq, y_label, fr_val
 
 
 class PositionalEncoding(nn.Module):
@@ -73,6 +112,10 @@ class TransformerTimingModel:
         learning_rate: float = 0.0005,
         epochs: int = 100,
         batch_size: int = 64,
+        # Momentum Transformer (Wood et al. 2021) — transaction-cost-aware loss
+        pnl_alpha: float = 5.0,           # PnL emphasis: weight = 1 + alpha · |forward_return|
+        trade_cost: float = 0.004,        # 한국 마찰비용 commission + tax (왕복 0.4%)
+        cost_lambda: float = 1.0,         # transaction cost 페널티 가중
     ):
         self.sequence_length = sequence_length
         self.d_model = d_model
@@ -82,6 +125,9 @@ class TransformerTimingModel:
         self.learning_rate = learning_rate
         self.epochs = epochs
         self.batch_size = batch_size
+        self.pnl_alpha = float(pnl_alpha)
+        self.trade_cost = float(trade_cost)
+        self.cost_lambda = float(cost_lambda)
         self.model: TransformerClassifier | None = None
         self.feature_names: list[str] = []
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -101,10 +147,23 @@ class TransformerTimingModel:
         y: pd.Series,
         X_val: pd.DataFrame | None = None,
         y_val: pd.Series | None = None,
+        forward_returns: pd.Series | None = None,
     ) -> dict:
+        """Transformer 학습.
+
+        Args:
+            forward_returns: 미래 수익률 raw 값 (Momentum Transformer paper 의 PnL-weighted
+                loss 입력). None 이면 기존 표준 CE loss 사용 (backward compat).
+        """
         mask = X.notna().all(axis=1) & y.notna()
         X_clean = X[mask].values.astype(np.float32)
         y_clean = y[mask].values
+
+        # forward_returns 도 같은 mask 적용
+        if forward_returns is not None:
+            fr_clean = forward_returns[mask].values.astype(np.float32)
+        else:
+            fr_clean = None
 
         if len(X_clean) < self.sequence_length + 50:
             return {"error": "insufficient_data"}
@@ -116,7 +175,13 @@ class TransformerTimingModel:
         X_norm = self._normalize(X_clean, fit=True)
         X_norm = np.nan_to_num(X_norm, nan=0.0)
 
-        dataset = TimeSeriesDataset(X_norm, y_mapped, self.sequence_length)
+        # forward_returns 있으면 PnL-aware dataset, 없으면 기존 dataset
+        if fr_clean is not None:
+            dataset = PnLAwareDataset(X_norm, y_mapped, self.sequence_length, fr_clean)
+            cost_aware = True
+        else:
+            dataset = TimeSeriesDataset(X_norm, y_mapped, self.sequence_length)
+            cost_aware = False
         loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
         self.model = TransformerClassifier(
@@ -130,23 +195,55 @@ class TransformerTimingModel:
         class_counts = np.bincount(y_mapped, minlength=3).astype(float) + 1
         class_weights = torch.FloatTensor(1.0 / class_counts).to(self.device)
 
-        criterion = nn.CrossEntropyLoss(weight=class_weights)
+        # cost-aware 모드면 reduction='none' (per-sample weighting), 아니면 표준 CE
+        if cost_aware:
+            criterion = nn.CrossEntropyLoss(weight=class_weights, reduction="none")
+        else:
+            criterion = nn.CrossEntropyLoss(weight=class_weights)
         optimizer = torch.optim.AdamW(self.model.parameters(), lr=self.learning_rate)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.epochs)
 
         best_loss = float("inf")
         patience_count = 0
 
+        if cost_aware:
+            logger.info(
+                f"Transformer cost-aware loss 활성: pnl_alpha={self.pnl_alpha}, "
+                f"trade_cost={self.trade_cost}, cost_lambda={self.cost_lambda}"
+            )
+
         for epoch in range(self.epochs):
             self.model.train()
             total_loss = 0
-            for batch_x, batch_y in loader:
+            for batch in loader:
+                if cost_aware:
+                    batch_x, batch_y, batch_fr = batch
+                    batch_fr = batch_fr.to(self.device)
+                else:
+                    batch_x, batch_y = batch
+                    batch_fr = None
                 batch_x = batch_x.to(self.device)
                 batch_y = batch_y.to(self.device)
 
                 optimizer.zero_grad()
                 output = self.model(batch_x)
-                loss = criterion(output, batch_y)
+
+                if cost_aware:
+                    # ── Momentum Transformer (Wood et al. 2021) cost-aware loss ──
+                    # 1) per-sample CE
+                    ce_per = criterion(output, batch_y)
+                    # 2) PnL emphasis: |forward_return| 큰 sample 에 더 가중
+                    pnl_weight = 1.0 + self.pnl_alpha * batch_fr.abs()
+                    weighted_ce = (ce_per * pnl_weight).mean()
+                    # 3) Transaction cost penalty: BUY/SELL 예측 확률 × 비용
+                    softmax_out = torch.softmax(output, dim=-1)
+                    # label_map: {-1:0, 0:1, 1:2} → SELL=0, HOLD=1, BUY=2
+                    trade_prob = softmax_out[:, 0] + softmax_out[:, 2]
+                    cost_pen = self.cost_lambda * self.trade_cost * trade_prob.mean()
+                    loss = weighted_ce + cost_pen
+                else:
+                    loss = criterion(output, batch_y)
+
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
                 optimizer.step()
@@ -164,8 +261,16 @@ class TransformerTimingModel:
                     logger.info(f"Transformer Early stopping at epoch {epoch+1}")
                     break
 
-        logger.info(f"Transformer 학습 완료: best_loss={best_loss:.4f}, samples={len(X_clean)}")
-        return {"best_loss": best_loss, "n_samples": len(X_clean)}
+        loss_type = "cost-aware" if cost_aware else "standard CE"
+        logger.info(
+            f"Transformer 학습 완료 ({loss_type}): "
+            f"best_loss={best_loss:.4f}, samples={len(X_clean)}"
+        )
+        return {
+            "best_loss": best_loss,
+            "n_samples": len(X_clean),
+            "cost_aware": cost_aware,
+        }
 
     def predict(self, X: pd.DataFrame) -> pd.Series:
         if self.model is None:

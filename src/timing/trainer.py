@@ -12,7 +12,7 @@ from loguru import logger
 
 from src.config import get_config
 from src.timing.features import build_features
-from src.timing.labels import generate_labels
+from src.timing.labels import generate_labels, generate_forward_returns
 
 
 def create_model(model_type: str, config=None):
@@ -120,9 +120,10 @@ def train_timing_model(
         )
 
     # ── 비-RL 모델 (DT/XGBoost/LightGBM/LSTM/Transformer) ──
-    # 전 종목 피처 + 라벨 통합
+    # 전 종목 피처 + 라벨 통합 (Transformer 는 forward_returns 도 함께)
     all_features = []
     all_labels = []
+    all_forward_returns = []
 
     for code, df in ohlcv_dict.items():
         if len(df) < 100:
@@ -135,22 +136,29 @@ def train_timing_model(
             buy_threshold=config.buy_threshold,
             sell_threshold=config.sell_threshold,
         )
+        # Momentum Transformer cost-aware loss 입력용 raw 미래 수익률
+        forward_returns = generate_forward_returns(
+            df["close"], forward_days=config.forward_days,
+        )
 
         features["_code"] = code
         all_features.append(features)
         all_labels.append(labels)
+        all_forward_returns.append(forward_returns)
 
     if not all_features:
         return {"error": "no_data"}
 
     X = pd.concat(all_features, ignore_index=True)
     y = pd.concat(all_labels, ignore_index=True)
+    fr = pd.concat(all_forward_returns, ignore_index=True)
 
     # _code 열 제거
     X = X.drop(columns=["_code"], errors="ignore")
 
     # Train/Val 분할
     X_val, y_val = None, None
+    fr_train = fr
     if train_end_date:
         # 시간 기반 분할은 개별 종목 내에서 해야 하지만,
         # 여기서는 간단히 전체의 80%를 학습, 20%를 검증으로 사용
@@ -159,12 +167,16 @@ def train_timing_model(
         y_val = y.iloc[split_idx:]
         X = X.iloc[:split_idx]
         y = y.iloc[:split_idx]
+        fr_train = fr.iloc[:split_idx]
 
     # 모델 생성 및 학습
     model = create_model(model_type)
-    # DT는 val 파라미터 없음
+    # DT는 val 파라미터 없음, Transformer 는 forward_returns 추가 전달
     if model_type == "decision_tree":
         result = model.train(X, y)
+    elif model_type == "transformer":
+        # Momentum Transformer cost-aware loss 활성화
+        result = model.train(X, y, X_val, y_val, forward_returns=fr_train)
     else:
         result = model.train(X, y, X_val, y_val)
 
