@@ -34,8 +34,11 @@ class TradingEnv:
         invalid_penalty: float = 0.002,
         sentiment_lambda: float = 0.0,       # SAPPO: reward += lambda * sentiment(date)
         # Trading-frequency penalty (2026-04-28 추가 — 과매매 정책 학습 차단)
-        min_holding_days: int = 5,           # 이 기간 미만 SELL 시 페널티
-        short_hold_penalty: float = 0.01,    # 짧은 보유 SELL 1회당 negative reward
+        # v2 (2026-04-29): 0.01 → 0.003 약화. v6 ensemble 결과 trades 0.9~1.0 으로 너무 신중 →
+        # portfolio 환경에서 정책 경직. portfolio context 는 이미 30종목 분산이 있어
+        # 단일종목 cautious 강제는 역효과.
+        min_holding_days: int = 5,
+        short_hold_penalty: float = 0.003,
     ):
         self.commission_rate = commission_rate
         self.tax_rate = tax_rate
@@ -189,28 +192,28 @@ class TradingEnv:
             cost = self.commission_rate + self.tax_rate
             realized_pnl = (current_price - self._entry_price) / self._entry_price
 
-            # SELL 보너스/페널티 v2 (2026-04-28 재설계):
-            # 이전 v1 은 +3~10% 익절 보상(0.3×pnl)이 +10% 페널티(0.2×pnl)보다 정량적으로
-            # 더 매력적이라 *추세주를 일찍 자르는 정책* 이 학습됨.
-            # v2: 추세 추종을 진짜로 학습시키기 위해 |페널티| ≫ |보상| 로 재조정.
+            # SELL 보너스/페널티 v3 (2026-04-29 재조정):
+            # v2 가 너무 강한 페널티(+10% ⇒ 0.6×pnl) 로 정책이 *매수 자체를 회피* 하게 학습됨
+            # (v6 ensemble: trades 0.9~1.0, portfolio_sharpe -0.07). v3 는 추세 추종 인센티브
+            # 는 유지하되 강도를 절반으로 완화 — portfolio 환경 cautiousness 역효과 회피.
             # - 손절(-3% 이하): 보너스 유지 (손실 확대 방지 학습)
-            # - 미세 익절(+0~3%): 페널티 (잡 trades, 마찰비용 누수)
-            # - 적정 익절(+3~10%): 작은 보너스 (수익 실현은 허용하되 강한 인센티브 X)
-            # - 조기 익절(+10% 이상): 큰 페널티 (추세 추종 강제)
+            # - 미세 익절(+0~3%): 작은 페널티 0.10 (잡 trades 억제, but v2 의 0.15 보다 약화)
+            # - 적정 익절(+3~10%): 중립적 작은 보상 0.10 유지
+            # - 조기 익절(+10% 이상): 페널티 0.30 (v2 의 0.6 → 절반)
             if realized_pnl < -0.03:
                 sell_bonus = 0.5 * abs(realized_pnl)         # 손절 보상 유지
             elif 0.0 <= realized_pnl < 0.03:
-                sell_bonus = -0.15 * realized_pnl            # 미세익절 페널티 (신규)
+                sell_bonus = -0.10 * realized_pnl            # v2 0.15 → 0.10 약화
             elif 0.03 <= realized_pnl <= 0.10:
-                sell_bonus = 0.10 * realized_pnl             # 보상 0.3 → 0.10 약화
+                sell_bonus = 0.10 * realized_pnl             # 유지
             elif realized_pnl > 0.10:
-                sell_bonus = -0.6 * realized_pnl             # 페널티 0.2 → 0.6 강화
+                sell_bonus = -0.30 * realized_pnl            # v2 0.6 → 0.30 절반
             else:
                 sell_bonus = 0.0
             # 정량 비교 (예시):
-            #   +5% 익절: bonus = 0.005 (이전 0.015) → 인센티브 ↓
-            #   +15% 추세 청산: penalty = -0.090 (이전 -0.030) → 3× 강한 억제
-            #   → +5% 익절 < +15% 보유 유지가 명백히 유리
+            #   +5% 익절: bonus = 0.005 (v2 동일)
+            #   +15% 추세 청산: penalty = -0.045 (v2 의 -0.090 → 절반, 여전히 5% 익절보다 큰 억제)
+            #   → 추세 추종 인센티브 유지 + cautious 함정 회피
 
             # Trading-frequency penalty: min_holding_days 미만 보유 후 SELL 시 추가 페널티
             # 손절(-3% 이하)은 면제 (손실 확대 방지가 우선)

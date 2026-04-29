@@ -231,12 +231,16 @@ def _retrain_rl_model(
     new_sharpe = result.get("sharpe", -999.0)
     logger.info(f"새 RL 모델 val_sharpe: {new_sharpe:.3f}")
 
-    # 2. 기존 모델과 비교
+    # 2. 기존 모델과 비교 (5중 게이트, 2026-04-29 확장)
     replaced = False
     new_portfolio_sharpe = -999.0
     old_portfolio_sharpe = -999.0
     new_portfolio_mdd = 0.0
     old_portfolio_mdd = 0.0
+    new_portfolio_win = 0.0
+    old_portfolio_win = 0.0
+    new_portfolio_return = 0.0
+    old_portfolio_return = 0.0
 
     if current_path.exists():
         # 검증용 데이터 분할 (학습/평가 동일 구간)
@@ -247,7 +251,7 @@ def _retrain_rl_model(
             split_idx = int(len(df) * (1 - val_ratio))
             val_dict[code] = df.iloc[split_idx:].reset_index(drop=True)
 
-        # ── Gate 1: 단일종목 episode Sharpe (기존 비교) ──
+        # ── Gate 1: 단일종목 episode Sharpe (sanity check) ──
         old_agent = RLTimingModel()
         old_agent.load(str(current_path))
         old_metrics = evaluate_rl_agent(old_agent, val_dict)
@@ -255,39 +259,52 @@ def _retrain_rl_model(
         logger.info(f"기존 RL 모델 val_sharpe: {old_sharpe:.3f}")
         gate1_pass = new_sharpe > old_sharpe + 0.05
 
-        # ── Gate 2 + 3: portfolio Sharpe + MDD ──
-        gate2_pass = False
-        gate3_pass = False
+        # ── Gate 2~5: portfolio Sharpe / MDD / Win / Return ──
+        gate2_pass = gate3_pass = gate4_pass = gate5_pass = False
         try:
             new_agent = RLTimingModel()
             new_agent.load(tmp_path)
             new_pf = evaluate_rl_portfolio(new_agent, val_dict)
             old_pf = evaluate_rl_portfolio(old_agent, val_dict)
-            new_portfolio_sharpe = new_pf.get("sharpe", -999.0)
-            old_portfolio_sharpe = old_pf.get("sharpe", -999.0)
-            new_portfolio_mdd = new_pf.get("max_drawdown", 0.0)
-            old_portfolio_mdd = old_pf.get("max_drawdown", 0.0)
+            new_portfolio_sharpe = float(new_pf.get("sharpe", -999.0))
+            old_portfolio_sharpe = float(old_pf.get("sharpe", -999.0))
+            new_portfolio_mdd = float(new_pf.get("max_drawdown", 0.0))
+            old_portfolio_mdd = float(old_pf.get("max_drawdown", 0.0))
+            new_portfolio_win = float(new_pf.get("win_rate", 0.0))
+            old_portfolio_win = float(old_pf.get("win_rate", 0.0))
+            new_portfolio_return = float(new_pf.get("total_return", 0.0))
+            old_portfolio_return = float(old_pf.get("total_return", 0.0))
 
             logger.info(
-                f"Portfolio Sharpe: 기존 {old_portfolio_sharpe:.3f} → 신 {new_portfolio_sharpe:.3f}, "
-                f"MDD: {old_portfolio_mdd:.2f}% → {new_portfolio_mdd:.2f}%"
+                f"Portfolio Sharpe: 기존 {old_portfolio_sharpe:+.3f} → 신 {new_portfolio_sharpe:+.3f}, "
+                f"MDD: {old_portfolio_mdd:.2f}% → {new_portfolio_mdd:.2f}%, "
+                f"Win: {old_portfolio_win:.1f}% → {new_portfolio_win:.1f}%, "
+                f"Return: {old_portfolio_return:+.2f}% → {new_portfolio_return:+.2f}%"
             )
 
             gate2_pass = new_portfolio_sharpe > old_portfolio_sharpe + 0.05
             # MDD: 더 음수일수록 나쁨. 신모델 MDD가 기존 -5%p 이내 악화는 허용
             gate3_pass = new_portfolio_mdd >= old_portfolio_mdd - 5.0
+            # Win rate: 신모델이 기존보다 -2%p 이내로만 떨어져도 허용
+            gate4_pass = new_portfolio_win >= old_portfolio_win - 2.0
+            # Return: 신모델이 기존보다 -5%p 이내로만 떨어져도 허용
+            gate5_pass = new_portfolio_return >= old_portfolio_return - 5.0
         except Exception as e:
             logger.warning(
                 f"Portfolio eval 실패 → 교체 거부 (안전 fallback): {e}"
             )
-            gate2_pass = False
-            gate3_pass = False
+            gate2_pass = gate3_pass = gate4_pass = gate5_pass = False
 
-        all_pass = gate1_pass and gate2_pass and gate3_pass
+        all_pass = (
+            gate1_pass and gate2_pass and gate3_pass and gate4_pass and gate5_pass
+        )
         logger.info(
-            f"교체 게이트: gate1(val_sharpe)={'✓' if gate1_pass else '✗'} "
+            f"교체 게이트: "
+            f"gate1(val_sharpe)={'✓' if gate1_pass else '✗'} "
             f"gate2(pf_sharpe)={'✓' if gate2_pass else '✗'} "
-            f"gate3(pf_mdd)={'✓' if gate3_pass else '✗'}"
+            f"gate3(pf_mdd)={'✓' if gate3_pass else '✗'} "
+            f"gate4(pf_win)={'✓' if gate4_pass else '✗'} "
+            f"gate5(pf_return)={'✓' if gate5_pass else '✗'}"
         )
 
         if all_pass:
@@ -299,11 +316,13 @@ def _retrain_rl_model(
             replaced = True
             logger.info(
                 f"RL 모델 교체 완료: val {old_sharpe:.3f}→{new_sharpe:.3f}, "
-                f"pf {old_portfolio_sharpe:.3f}→{new_portfolio_sharpe:.3f}"
+                f"pf_sharpe {old_portfolio_sharpe:+.3f}→{new_portfolio_sharpe:+.3f}, "
+                f"pf_win {old_portfolio_win:.1f}%→{new_portfolio_win:.1f}%, "
+                f"pf_return {old_portfolio_return:+.2f}%→{new_portfolio_return:+.2f}%"
             )
         else:
             Path(tmp_path).unlink(missing_ok=True)
-            logger.info("RL 모델 유지: 게이트 미통과")
+            logger.info("RL 모델 유지: 게이트 미통과 (5중 중 일부 실패)")
     else:
         # 기존 모델 없으면 바로 저장
         current_path.parent.mkdir(parents=True, exist_ok=True)
@@ -323,4 +342,8 @@ def _retrain_rl_model(
         "old_portfolio_sharpe": old_portfolio_sharpe,
         "new_portfolio_mdd": new_portfolio_mdd,
         "old_portfolio_mdd": old_portfolio_mdd,
+        "new_portfolio_win": new_portfolio_win,
+        "old_portfolio_win": old_portfolio_win,
+        "new_portfolio_return": new_portfolio_return,
+        "old_portfolio_return": old_portfolio_return,
     }

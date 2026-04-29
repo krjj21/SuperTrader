@@ -383,15 +383,17 @@ def train_rl_model(
     logger.info(f"미니배치 크기: {auto_mini_batch} (자동 설정)")
 
     codes = list(train_dict.keys())
-    best_score = -999.0          # trades-adjusted Sharpe (early stopping criterion)
+    best_score = -999.0          # portfolio composite score (sharpe + 0.05·win + 0.01·return - 0.02·|mdd|)
     best_state_dict = None
     patience = 0
-    max_patience = 10  # early stopping (× 5 episode 주기 = 50 episode 무개선 시 종료)
+    max_patience = 6  # 6 portfolio_eval (= 60 episode) 무개선 시 종료
+    # NOTE: 2026-04-29 — single-stock val_sharpe 의 trades_adj_score 가 portfolio 환경에서
+    # 무의미함이 v6 ensemble retrain 으로 입증 (val 8.6 / portfolio -0.07).
+    # best 기준 자체를 portfolio 환경 metric 으로 변경.
 
-    # Portfolio gate (선택적): 매 portfolio_eval_every episode 마다 portfolio backtest 로 추가 검증
-    # 0 또는 None 이면 비활성. 기본 25 — 학습 100분 중 4-5회 호출, 추가 시간 ~5min ×5 = 25min
-    portfolio_eval_every = 25
-    best_portfolio_sharpe = -999.0   # 최고 portfolio sharpe 기록 (참고용)
+    # Portfolio eval 주기 — 25 → 10 으로 강화 (best 신호 빈도 ↑, 학습 시간 +20min/seed)
+    portfolio_eval_every = 10
+    best_portfolio_sharpe = -999.0   # 참고용 (composite 의 sharpe 항만 별도 기록)
 
     n_episodes = rl_config.episodes
     logger.info(f"PPO 학습 시작: {n_episodes} 에피소드 × {len(codes)} 종목")
@@ -488,7 +490,7 @@ def train_rl_model(
                 f"ETA={eta/60:.0f}min"
             )
 
-            # ── Portfolio gate (조건부): 비싸므로 25 episode 마다만 ──
+            # ── Portfolio eval (best 선택의 *유일한* 기준) — 매 portfolio_eval_every episode ──
             if portfolio_eval_every and (episode + 1) % portfolio_eval_every == 0:
                 try:
                     pf_metrics = evaluate_rl_portfolio(
@@ -496,37 +498,57 @@ def train_rl_model(
                         commission_rate=config.backtest.commission_rate,
                         tax_rate=config.backtest.tax_rate,
                     )
-                    pf_sharpe = pf_metrics.get("sharpe", -999.0)
-                    pf_mdd = pf_metrics.get("max_drawdown", 0.0)
-                    pf_trades = pf_metrics.get("total_trades", 0)
+                    pf_sharpe = float(pf_metrics.get("sharpe", -999.0))
+                    pf_mdd = float(pf_metrics.get("max_drawdown", 0.0))
+                    pf_win = float(pf_metrics.get("win_rate", 0.0))
+                    pf_return = float(pf_metrics.get("total_return", 0.0))
+                    pf_trades = int(pf_metrics.get("total_trades", 0))
+
+                    # Composite score — 다중 metric 가중합 (사용자 요구)
+                    # 가중치 직관:
+                    #   sharpe (주된 위험조정 수익 척도, 단위 1.0)
+                    #   + 0.05 × win_rate%  (50% → 2.5 / 65% → 3.25)
+                    #   + 0.01 × return%   (30% → 0.30 / 50% → 0.50)
+                    #   - 0.02 × |mdd%|    (10% → 0.20 / 20% → 0.40)
+                    composite = (
+                        pf_sharpe
+                        + 0.05 * pf_win
+                        + 0.01 * pf_return
+                        - 0.02 * abs(pf_mdd)
+                    )
                     if pf_sharpe > best_portfolio_sharpe:
                         best_portfolio_sharpe = pf_sharpe
+
                     logger.info(
-                        f"  [Portfolio] sharpe={pf_sharpe:.3f}, mdd={pf_mdd:.2f}%, "
-                        f"trades={pf_trades}, best_pf={best_portfolio_sharpe:.3f}"
+                        f"  [Portfolio] sharpe={pf_sharpe:+.3f}, mdd={pf_mdd:.2f}%, "
+                        f"win={pf_win:.1f}%, return={pf_return:+.2f}%, "
+                        f"trades={pf_trades}, composite={composite:+.3f}, "
+                        f"best_composite={best_score:+.3f}"
                     )
+
+                    # ── Best 갱신: composite 가 가장 높을 때만 ──
+                    if composite > best_score:
+                        best_score = composite
+                        best_state_dict = {
+                            k: v.clone() for k, v in agent.actor.state_dict().items()
+                        }
+                        patience = 0
+                        logger.info(
+                            f"  → Best (composite={best_score:+.3f}, "
+                            f"pf_sharpe={pf_sharpe:+.3f}, win={pf_win:.1f}%, "
+                            f"return={pf_return:+.2f}%, mdd={pf_mdd:.2f}%)"
+                        )
+                    else:
+                        patience += 1
+                        if patience >= max_patience:
+                            logger.info(
+                                f"  → Early stopping (patience={max_patience} portfolio_evals, "
+                                f"best_composite={best_score:+.3f})"
+                            )
+                            break
                 except Exception as e:
                     logger.warning(f"  [Portfolio] eval 실패: {e}")
-
-            # ── Best 선택은 trades-adjusted score 기준 ──
-            if trades_adj_score > best_score:
-                best_score = trades_adj_score
-                best_state_dict = {
-                    k: v.clone() for k, v in agent.actor.state_dict().items()
-                }
-                patience = 0
-                logger.info(
-                    f"  → Best (adj_score={best_score:.3f}, "
-                    f"sharpe={val_sharpe:.3f}, trades={avg_trades:.1f})"
-                )
-            else:
-                patience += 1
-                if patience >= max_patience:
-                    logger.info(
-                        f"  → Early stopping (patience={max_patience}, "
-                        f"best_adj_score={best_score:.3f})"
-                    )
-                    break
+                    # eval 실패 시 patience 증가 안 함 (transient error 보호)
 
     # 최적 모델 복원 및 저장
     if best_state_dict is not None:
