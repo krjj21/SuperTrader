@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Backtest — compares strategies (factor_only, factor_macd, factor_kdj, factor_decision_tree, factor_xgboost, factor_rl, factor_hybrid)
+# Backtest — compares strategies (factor_only, factor_macd, factor_kdj, factor_decision_tree, factor_xgboost, factor_rl, factor_hybrid, factor_hybrid_transformer + research variants tx_p80/tx_p85)
 python main.py backtest
 python main.py backtest --strategy factor_hybrid       # single strategy, faster
 python main.py backtest --factor-module both           # alpha101 + alpha158
@@ -156,7 +156,11 @@ All strategies inherit `BaseStrategy` and implement `generate_signal(code, df) �
 - **FactorMACDStrategy**, **FactorKDJStrategy**: Classic technical signals.
 - **FactorMLStrategy**: Wraps any ML model via `TimingPredictor`.
 - **FactorRLStrategy**: PPO agent with business-day holding tracking. Live `sync_positions()` uses DB → chart estimate → today fallback for entry dates.
-- **FactorHybridStrategy**: XGBoost (alpha) + RL (timing/risk). BUY requires both; SELL on XGBoost alone. As of 2026-04-20: **+63.3% return, Sharpe 0.45, MDD -21.8%** with `buy_action_threshold=0.07`. These figures came from `scripts/threshold_sweep.py` against the universe at that time — re-run the sweep if the universe, factor module, or RL model changes before trusting them.
+- **FactorHybridStrategy**: alpha model (XGBoost or Transformer) + RL (timing/risk). BUY requires both; SELL on alpha alone (with confidence gate). Constructor accepts `ml_model_type ∈ {xgboost, transformer}` and explicit `ml_buy_threshold`/`ml_sell_threshold` overrides; otherwise falls back to `xgb_*_confidence_threshold` (0.55/0.60) for XGB or `transformer_*_confidence_threshold` (0.70/0.75) for transformer (softmax flatter → higher gate needed). Defaults to XGB.
+  - Past peak: 2026-04-20 sweep on legacy universe → **+63.3% / Sharpe 0.45 / MDD −21.8% @ buy_action_threshold=0.07**.
+  - 2026-04-30 walk-forward (top_n=15, biweekly, mid-cap rank 30-150, train_ratio=0.5, threshold=0.03): factor_hybrid **+515% / 43 trades / 10.4d hold**. Transformer variants (factor_hybrid_transformer, tx_p80, tx_p85) all **net-negative with 700-880 trades** — overtrading, do NOT promote to production.
+  - Sharpe printed by `report.py` is unreliable when total_return is large (known scaling oddity); cross-check Calmar / MDD / trade count / profit factor before trusting.
+  - Cited figures stale fast — re-run `scripts/threshold_sweep.py` if universe / factor module / RL model / walk-forward ratio changes.
 
 **Important**: `FactorRLStrategy` and `FactorHybridStrategy` accept `current_date` kwarg in `generate_signal()` and `sync_positions()` (with `entry_dates` dict) so backtest uses correct holding days. Live mode omits these and falls back to `datetime.now()`.
 
@@ -206,10 +210,13 @@ After a retrain on 2026-04-27 produced a **val_sharpe=+15.8 / portfolio_sharpe=�
 
 ### RL Action Thresholds (`config/settings.yaml` → `timing.rl`)
 
-- `buy_action_threshold: 0.05` — current default (was 0.07 in earlier sweep; lowered after 2026-04-27)
+- `buy_action_threshold: 0.03` — 2026-05-01 ON_up 위에서 재스윕(0.01/0.03/0.05/0.07): **0.01 ≡ 0.03** (RL action 분포가 좁아 두 임계값 모두 동일하게 통과·차단), 0.05/0.07 로 올리면 거래 ↓ 수익 ↓. 0.03 이 total_return peak — sweep 레버는 막다른 골목, 거래 빈도를 늘리려면 RL 재학습 필요. 0.05 가 calmar_ratio peak(0.97) 이지만 수익 -80%p 트레이드.
 - `sell_action_threshold: 0.06`
 - `sentiment_lambda: 0.0` — SAPPO off by default, 0.1 when news data ≥6 months accumulated
 - `sentiment_source: "off"` — off / news / mock / xgb_proxy
+- `xgb_buy_confidence_threshold: 0.55`, `xgb_sell_confidence_threshold: 0.60` — Hybrid alpha layer gates (XGBoost predict_proba)
+- `transformer_buy_confidence_threshold: 0.70`, `transformer_sell_confidence_threshold: 0.75` — separate gates because Transformer softmax is flatter than XGB; reusing 0.55/0.60 lets ~93% of signals through and overrides RL gating
+- `ensemble_seeds: [42, 1, 2]` — RL trains N seeds, picks median-Sharpe model. `[]` disables (single seed=42)
 
 Flow: `factor_rl.py` → `predictor.py` → `rl_agent.py`. Live `sync_positions()` passes `avg_prices` for DB → chart estimate → today fallback buy_date resolution.
 
@@ -279,6 +286,7 @@ API: `/api/status`, `/api/pool` (reads `data/current_pool.json` with encoding fa
 - **order.py**: `Order.reference_price` (signal-time price) for market-order notification display. `check_filled()` updates filled_qty/price post-fill.
 - **account.py**: `AccountSummary` with `total_deposit` (D+2) and `available_cash` (unsettled-aware).
 - **risk/manager.py**: 5%/position, -5% daily loss limit, -7% stop loss, kill switch (3 consecutive errors). `is_trading_allowed` blocks weekends + Korean holidays via `src/utils/market_calendar.py`. `calculate_position_size(regime_label=...)` applies a multiplier when `regime.enabled and regime.lambda_>0`.
+  - **Confidence-proportional sizing (2026-05-01 도입)**: `confidence_sizing_enabled=true, mode=scale, min=1.0, max=2.0`. Hybrid `TradeSignal.strength` 가 XGB `predict_proba_last` 기반 0.5~1.0 으로 들어오면 `min + (max-min) × ((strength-0.5)/0.5)` 선형 매핑으로 슬롯 배수가 결정됨 (1.0× ~ 2.0×). `mode=clamp` 도 구현되어 있어 하향 사이징이 필요하면 `min=0.5, max=1.0` 으로 되돌릴 수 있음. 백테스트 OOS 92회: total_return 515% → 638% (+123%p), Sharpe −2.53 → −2.00, MDD 거의 동일(−114%). 라이브와 백테스트 양쪽에서 동일 공식(`src/risk/manager.py` + `backtest/portfolio_engine.py`).
 - **notification/slack_bot.py**: **Dual channels** — `#supertrader` (system/reports/feedback/regime alerts), `#super_trader_buy_sell` (signals/fills/fails/stop-loss). `SLACK_TRADE_CHANNEL` env override supported. `notify_info()` for general system messages.
 - **notification/notion_reporter.py**: Daily trading log to Notion DB.
 

@@ -84,6 +84,23 @@ def run_strategy_comparison(
             ml_model_type="transformer",
             name="factor_hybrid_transformer",
         )
+        # Threshold sweep 변형 — transformer softmax 평탄성 보정 차원
+        strategies["factor_hybrid_tx_p80"] = FactorHybridStrategy(
+            ml_model_path=model_paths["transformer"],
+            rl_model_path=model_paths["rl"],
+            ml_model_type="transformer",
+            name="factor_hybrid_tx_p80",
+            ml_buy_threshold=0.80,
+            ml_sell_threshold=0.85,
+        )
+        strategies["factor_hybrid_tx_p85"] = FactorHybridStrategy(
+            ml_model_path=model_paths["transformer"],
+            rl_model_path=model_paths["rl"],
+            ml_model_type="transformer",
+            name="factor_hybrid_tx_p85",
+            ml_buy_threshold=0.85,
+            ml_sell_threshold=0.90,
+        )
 
     # 특정 전략만 실행
     if only_strategies:

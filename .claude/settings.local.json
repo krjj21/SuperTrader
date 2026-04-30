@@ -16,7 +16,26 @@
       "Bash(curl -sS http://192.168.0.20:5000/)",
       "Bash(curl -sS http://192.168.0.20:5000/api/status)",
       "Bash(curl -sS http://192.168.0.20:5000/api/scan_summary)",
-      "mcp__claude_ai_Slack__slack_send_message"
+      "mcp__claude_ai_Slack__slack_send_message",
+      "Bash(grep -E \"cursor|copilot|README|\\\\.md$\")",
+      "mcp__claude_ai_Notion__notion-search",
+      "mcp__claude_ai_Notion__notion-create-pages",
+      "Bash(PYTHONIOENCODING=utf-8 PYTHONUTF8=1 /mnt/e/SuperTrader/venv/Scripts/python.exe main.py status)",
+      "Bash(/mnt/c/Windows/System32/tasklist.exe /FI \"IMAGENAME eq python.exe\" /FO CSV)",
+      "Bash(ps -o pid,etime,stat,cmd -p 1101,1121)",
+      "Bash(kill 1121 1101)",
+      "Bash(/mnt/c/Windows/System32/taskkill.exe /PID 54692 /F)",
+      "Bash(grep -v \"\\\\.log['\\\\\"]\\\\s*$\")",
+      "Bash(grep -n \"def check_signals\\\\|market_open\\\\|market_close\\\\|is_market_open\\\\|return$\" /mnt/e/SuperTrader/main.py)",
+      "Bash(\"E:/SuperTrader/venv/Scripts/python.exe\" scripts/threshold_sweep.py)",
+      "Bash(/mnt/c/Windows/System32/taskkill.exe *)",
+      "Bash(nohup ./venv/Scripts/python.exe -X utf8 main.py live)",
+      "Bash(echo \"live PID=$!\" cd /mnt/e/SuperTrader)",
+      "Bash(nohup ./venv/Scripts/python.exe -X utf8 web/app.py)",
+      "Bash(echo \"web PID=$!\" sleep 5 ps -ef)",
+      "Bash(/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe *)",
+      "Bash(echo \"live PID=$!\")",
+      "Bash(python3 *)"
     ]
   }
 }

@@ -612,7 +612,7 @@ def train_rl_model(
             val_win_rate=float(final_metrics.get("win_rate", 0.0)),
             val_avg_trades=float(final_metrics.get("avg_trades", 0.0)),
             model_path=str(save_path),
-            notes=f"train_time={total_train_time/60:.1f}min, best_sharpe={best_sharpe:.3f}",
+            notes=f"train_time={total_train_time/60:.1f}min, best_composite={best_score:.3f}",
         )
         logger.info(f"학습 런 기록: {auto_name}")
     except Exception as e:

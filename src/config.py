@@ -134,6 +134,11 @@ class RLParams(BaseModel):
     # Hybrid: XGB BUY 신뢰도 ≥ threshold 일 때만 진입 허용 (false positive 차단)
     # 잘못된 매수 = 즉시 손실, 잘못된 보류 = 기회 비용에 그쳐 BUY 가 더 보수적이어야 함
     xgb_buy_confidence_threshold: float = 0.55
+    # Hybrid (transformer alpha): softmax 분포가 XGB 보다 평탄해 동일 0.55/0.60 임계값
+    # 사용 시 980/1059 시그널이 통과해 RL 게이팅 무력화. 이를 보정하기 위한 별도 임계값.
+    # 첫 추정치: BUY 0.70, SELL 0.75 (XGB 의 ~5% 통과율 근사 목표)
+    transformer_buy_confidence_threshold: float = 0.70
+    transformer_sell_confidence_threshold: float = 0.75
     # Ensemble: N개 시드로 학습 후 median Sharpe 모델 채택. 빈 리스트 → 단일 시드(42)
     # GPU 시간 N배 비용으로 시드 변동 ±0.3~0.5 회귀 위험 큰 폭 감소
     ensemble_seeds: list[int] = []
@@ -175,6 +180,17 @@ class RiskConfig(BaseModel):
     daily_loss_limit_pct: float = 0.05
     stop_loss_pct: float = 0.07
     max_order_retries: int = 3
+    # Confidence-proportional sizing: True 일 때 포지션 슬롯에 strength 를 곱해
+    # 강한 시그널은 더 큰 슬롯을 받는다. Hybrid 의 strength 는 0.5~1.0 (XGB
+    # predict_proba 기반) 이며 다른 전략은 고정값이므로 활성화 시 의미를 확인할 것.
+    # mode:
+    #   "clamp" — mult = clamp(strength, min, max)  (기본/하향 사이징)
+    #   "scale" — mult = min + (max-min) × ((strength-0.5)/0.5)  (선형 매핑, 상향용)
+    # min/max 가 0.5/1.0 일 때 clamp 와 scale 은 동일하게 동작한다(하위 호환).
+    confidence_sizing_enabled: bool = False
+    confidence_sizing_mode: str = "clamp"
+    confidence_sizing_min_mult: float = 0.5
+    confidence_sizing_max_mult: float = 1.0
 
 
 class ScheduleConfig(BaseModel):

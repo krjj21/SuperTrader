@@ -140,6 +140,13 @@ risk:
   daily_loss_limit_pct: 0.05      # 일일 손실 한도 5%
   stop_loss_pct: 0.07             # 개별 손절 7%
   max_order_retries: 3
+  # Confidence-proportional sizing (2026-05-01 채택)
+  # OOS 92회 백테스트: scale 1.0/2.0 가 OFF 대비 total_return +123%p,
+  # Sharpe도 -2.53 → -2.00 동시 개선, MDD 거의 동일(-114%).
+  confidence_sizing_enabled: true
+  confidence_sizing_mode: scale     # clamp(하향) | scale(상향, 0.5~1.0 → min~max 선형)
+  confidence_sizing_min_mult: 1.0   # 약신호도 풀 슬롯 (1.0×)
+  confidence_sizing_max_mult: 2.0   # 강신호는 2× 슬롯
 
 # ── 스케줄 ──
 schedule:

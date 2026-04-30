@@ -229,21 +229,53 @@ class PortfolioBacktestEngine:
         current_pool = []
 
         # T일 시그널 → T+1일 시가 체결을 위한 주문 큐
-        # 4-tuple: (code, name, side, is_stop_loss) — stop_loss 매도 시 갭 패널티 적용
-        pending_orders: list[tuple[str, str, str, bool]] = []
+        # 5-tuple: (code, name, side, is_stop_loss, strength) — stop_loss 매도 시 갭 패널티,
+        # strength 는 confidence-proportional sizing 용 (BUY 만 사용, 그 외 None)
+        pending_orders: list[tuple[str, str, str, bool, float | None]] = []
+        # confidence-proportional sizing 설정 캐시
+        try:
+            _risk_cfg = get_config().risk
+            self._conf_sizing_enabled = bool(getattr(_risk_cfg, "confidence_sizing_enabled", False))
+            self._conf_sizing_mode = str(getattr(_risk_cfg, "confidence_sizing_mode", "clamp"))
+            self._conf_sizing_min = float(getattr(_risk_cfg, "confidence_sizing_min_mult", 0.5))
+            self._conf_sizing_max = float(getattr(_risk_cfg, "confidence_sizing_max_mult", 1.0))
+        except Exception:
+            self._conf_sizing_enabled = False
+            self._conf_sizing_mode = "clamp"
+            self._conf_sizing_min = 0.5
+            self._conf_sizing_max = 1.0
 
         for i, date in enumerate(all_dates):
             # ── 1. 전일 시그널의 주문을 당일 시가로 체결 ──
             if pending_orders:
                 stopped_by_pending: set[str] = set()
                 any_executed = False
-                for code, name, side, is_stop in pending_orders:
+                for code, name, side, is_stop, strength in pending_orders:
                     exec_price = self._get_open_cached(code, date)
                     if exec_price <= 0:
                         continue
                     if side == "buy":
                         if code not in self.positions and len(self.positions) < self.max_positions:
-                            if self._buy(code, name, exec_price, date):
+                            buy_amount: float | None = None
+                            if (
+                                self._conf_sizing_enabled
+                                and strength is not None
+                                and strength > 0
+                            ):
+                                total_value = self.cash + sum(
+                                    p.quantity * p.avg_price for p in self.positions.values()
+                                )
+                                base_slot = total_value / self.max_positions
+                                if self._conf_sizing_mode == "scale":
+                                    # 0.5..1.0 → min..max 선형 매핑 (상향 사이징용)
+                                    norm = max(0.0, min(1.0, (float(strength) - 0.5) / 0.5))
+                                    mult = self._conf_sizing_min + (
+                                        self._conf_sizing_max - self._conf_sizing_min
+                                    ) * norm
+                                else:
+                                    mult = min(max(float(strength), self._conf_sizing_min), self._conf_sizing_max)
+                                buy_amount = base_slot * mult
+                            if self._buy(code, name, exec_price, date, amount=buy_amount):
                                 any_executed = True
                     elif side == "sell":
                         if code in self.positions:
@@ -268,13 +300,13 @@ class PortfolioBacktestEngine:
                 # 퇴출 종목은 모든 전략에서 T+1 SELL 강제 (풀 diff 기반)
                 for code in old_set - new_set:
                     if code in self.positions:
-                        pending_orders.append((code, "", "sell", False))
+                        pending_orders.append((code, "", "sell", False, None))
 
                 # 신규 편입 자동 BUY 는 commit_pool 기반 전략(factor_only)만 수행.
                 # 타이밍 전략은 generate_signal 이 진입을 결정한다.
                 if hasattr(strategy, "commit_pool"):
                     for code in new_set - old_set:
-                        pending_orders.append((code, "", "buy", False))
+                        pending_orders.append((code, "", "buy", False, None))
                     strategy.commit_pool()
 
                 current_pool = new_pool
@@ -289,7 +321,7 @@ class PortfolioBacktestEngine:
                 pos = self.positions[code]
                 pnl_pct = close_price / pos.avg_price - 1
                 if pnl_pct <= stop_loss_threshold:
-                    pending_orders.append((code, pos.name, "sell", True))
+                    pending_orders.append((code, pos.name, "sell", True, None))
                     stopped_today.add(code)
 
             # ── 4. 일일 타이밍 시그널: T일 데이터로 판단 → T+1 체결 예약 ──
@@ -318,7 +350,9 @@ class PortfolioBacktestEngine:
                         code, signal.stock_name, "BUY", signal.reason, df_until, date,
                     ):
                         continue
-                    pending_orders.append((code, signal.stock_name, "buy", False))
+                    pending_orders.append(
+                        (code, signal.stock_name, "buy", False, float(signal.strength))
+                    )
 
                 elif signal.signal == Signal.SELL and code in self.positions:
                     # SELL 은 검증기에서도 항상 확정되지만 일관성을 위해 호출
@@ -326,7 +360,7 @@ class PortfolioBacktestEngine:
                         code, signal.stock_name, "SELL", signal.reason, df_until, date,
                     ):
                         continue
-                    pending_orders.append((code, "", "sell", False))
+                    pending_orders.append((code, "", "sell", False, None))
 
             # ── 5. 전략-엔진 포지션 동기화 (RL 전략 등) ──
             # 시그널 생성 중 전략이 옵티미스틱하게 추가한 엔트리 정리 +

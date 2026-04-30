@@ -173,6 +173,22 @@ class RiskManager:
         else:
             quantity = invest_amount // signal.price
 
+        # ── Confidence-proportional 사이즈 모듈레이션 ──
+        conf_mult = 1.0
+        if (
+            self.config.confidence_sizing_enabled
+            and signal.strength > 0
+        ):
+            lo = float(self.config.confidence_sizing_min_mult)
+            hi = float(self.config.confidence_sizing_max_mult)
+            mode = str(getattr(self.config, "confidence_sizing_mode", "clamp"))
+            if mode == "scale":
+                norm = max(0.0, min(1.0, (float(signal.strength) - 0.5) / 0.5))
+                conf_mult = lo + (hi - lo) * norm
+            else:
+                conf_mult = min(max(float(signal.strength), lo), hi)
+            quantity = int(quantity * conf_mult)
+
         # ── Regime 사이즈 모듈레이션 ──
         regime_mult = 1.0
         if regime_label:
@@ -188,7 +204,12 @@ class RiskManager:
         quantity = max(quantity, 0)
 
         if quantity > 0:
-            extra = f" regime={regime_label} ×{regime_mult:.2f}" if regime_mult != 1.0 else ""
+            extras = []
+            if conf_mult != 1.0:
+                extras.append(f"conf×{conf_mult:.2f}")
+            if regime_mult != 1.0:
+                extras.append(f"regime={regime_label} ×{regime_mult:.2f}")
+            extra = f" ({', '.join(extras)})" if extras else ""
             logger.info(
                 f"포지션 사이즈 계산: {signal.stock_code} "
                 f"{quantity}주 × {signal.price:,}원 = {quantity * signal.price:,}원 "

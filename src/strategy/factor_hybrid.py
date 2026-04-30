@@ -28,12 +28,16 @@ class FactorHybridStrategy(BaseStrategy):
         params: dict | None = None,
         ml_model_type: str = "xgboost",
         name: str = "factor_hybrid",
+        ml_buy_threshold: float | None = None,
+        ml_sell_threshold: float | None = None,
     ):
         super().__init__(name=name, params=params)
         from src.timing.predictor import TimingPredictor
         from src.config import get_config
 
         # Alpha Layer: ml_model_type (xgboost 또는 transformer)
+        self._ml_model_type = ml_model_type
+        self._ml_label = "XGB" if ml_model_type == "xgboost" else ml_model_type.capitalize()
         self.ml_predictor = TimingPredictor(ml_model_type, ml_model_path)
 
         # RL Layer: PPO (리스크 필터)
@@ -41,8 +45,17 @@ class FactorHybridStrategy(BaseStrategy):
         rl_cfg = get_config().timing.rl
         self._buy_threshold = rl_cfg.buy_action_threshold
         self._sell_threshold = rl_cfg.sell_action_threshold
-        self._xgb_sell_threshold = float(getattr(rl_cfg, "xgb_sell_confidence_threshold", 0.60))
-        self._xgb_buy_threshold = float(getattr(rl_cfg, "xgb_buy_confidence_threshold", 0.55))
+        # 임계값 우선순위: 명시적 인자 > ml_model_type 기반 config > XGB 기본값
+        # transformer 는 softmax 분포가 평탄해 XGB 와 같은 0.55/0.60 사용 시 게이팅 무력화.
+        if ml_buy_threshold is not None and ml_sell_threshold is not None:
+            self._ml_buy_threshold = float(ml_buy_threshold)
+            self._ml_sell_threshold = float(ml_sell_threshold)
+        elif ml_model_type == "transformer":
+            self._ml_buy_threshold = float(getattr(rl_cfg, "transformer_buy_confidence_threshold", 0.70))
+            self._ml_sell_threshold = float(getattr(rl_cfg, "transformer_sell_confidence_threshold", 0.75))
+        else:
+            self._ml_buy_threshold = float(getattr(rl_cfg, "xgb_buy_confidence_threshold", 0.55))
+            self._ml_sell_threshold = float(getattr(rl_cfg, "xgb_sell_confidence_threshold", 0.60))
 
         self._pool: set[str] = set()
         # 포지션 추적 (RL 레이어용)
@@ -123,12 +136,12 @@ class FactorHybridStrategy(BaseStrategy):
 
         # ── Hybrid 결합 로직 ──
 
-        # SELL: XGBoost SELL 시 신뢰도 + RL 합의로 3-way 분기
+        # SELL: Alpha SELL 시 신뢰도 + RL 합의로 3-way 분기
         if ml_signal == -1 and holding:
-            xgb_sell_prob = self.ml_predictor.predict_proba_last(df, label=-1)
+            ml_sell_prob = self.ml_predictor.predict_proba_last(df, label=-1)
             # predict_proba 미지원 또는 실패 시 기존 동작(강제 실행) 유지
-            high_conf = xgb_sell_prob is None or xgb_sell_prob >= self._xgb_sell_threshold
-            conf_str = f"{xgb_sell_prob:.2f}" if xgb_sell_prob is not None else "n/a"
+            high_conf = ml_sell_prob is None or ml_sell_prob >= self._ml_sell_threshold
+            conf_str = f"{ml_sell_prob:.2f}" if ml_sell_prob is not None else "n/a"
 
             if rl_signal == -1:
                 # 1) RL 동의 — 항상 실행 (신뢰도 무관)
@@ -136,45 +149,45 @@ class FactorHybridStrategy(BaseStrategy):
                     signal=Signal.SELL, stock_code=stock_code, stock_name=stock_name,
                     price=price, strength=0.90,
                     reason=(
-                        f"Hybrid SELL (XGB+RL 동의, conf={conf_str}) "
+                        f"Hybrid SELL ({self._ml_label}+RL 동의, conf={conf_str}) "
                         f"보유 {holding_days}일, PnL {unrealized_pnl:+.1%}"
                     ),
                 )
             if high_conf:
-                # 2) RL 보류이지만 XGB 고신뢰 → 실행
+                # 2) RL 보류이지만 Alpha 고신뢰 → 실행
                 return TradeSignal(
                     signal=Signal.SELL, stock_code=stock_code, stock_name=stock_name,
                     price=price, strength=0.70,
                     reason=(
-                        f"Hybrid SELL (XGB 고신뢰 conf={conf_str} ≥ {self._xgb_sell_threshold:.2f}, "
+                        f"Hybrid SELL ({self._ml_label} 고신뢰 conf={conf_str} ≥ {self._ml_sell_threshold:.2f}, "
                         f"RL 보류 무시) 보유 {holding_days}일, PnL {unrealized_pnl:+.1%}"
                     ),
                 )
-            # 3) RL 보류 AND XGB 저신뢰 → HOLD (신규 보호)
+            # 3) RL 보류 AND Alpha 저신뢰 → HOLD (신규 보호)
             return TradeSignal(
                 signal=Signal.HOLD, stock_code=stock_code, price=price,
                 reason=(
-                    f"Hybrid HOLD (XGB 저신뢰 conf={conf_str} < {self._xgb_sell_threshold:.2f} "
+                    f"Hybrid HOLD ({self._ml_label} 저신뢰 conf={conf_str} < {self._ml_sell_threshold:.2f} "
                     f"AND RL 반대) 보유 {holding_days}일, PnL {unrealized_pnl:+.1%}"
                 ),
             )
 
-        # BUY: XGBoost BUY + XGB 고신뢰 + RL BUY → 실행 (3중 합의)
-        # 2026-04-28: BUY 에 xgb_buy_confidence_threshold 추가. 잘못된 매수는 즉시 손실,
+        # BUY: Alpha BUY + Alpha 고신뢰 + RL BUY → 실행 (3중 합의)
+        # 2026-04-28: BUY 에 *_buy_confidence_threshold 추가. 잘못된 매수는 즉시 손실,
         # 잘못된 보류는 기회 비용에 그치므로 BUY 가 SELL 보다 더 엄격해야 한다.
         if ml_signal == 1 and not holding:
-            xgb_buy_prob = self.ml_predictor.predict_proba_last(df, label=1)
+            ml_buy_prob = self.ml_predictor.predict_proba_last(df, label=1)
             # predict_proba 미지원 시 None → 기존 동작(통과) 유지 (호환성)
-            buy_conf_pass = xgb_buy_prob is None or xgb_buy_prob >= self._xgb_buy_threshold
-            buy_conf_str = f"{xgb_buy_prob:.2f}" if xgb_buy_prob is not None else "n/a"
+            buy_conf_pass = ml_buy_prob is None or ml_buy_prob >= self._ml_buy_threshold
+            buy_conf_str = f"{ml_buy_prob:.2f}" if ml_buy_prob is not None else "n/a"
 
             if not buy_conf_pass:
-                # XGB BUY 시그널이지만 신뢰도 미달 → HOLD (false positive 차단)
+                # Alpha BUY 시그널이지만 신뢰도 미달 → HOLD (false positive 차단)
                 return TradeSignal(
                     signal=Signal.HOLD, stock_code=stock_code, price=price,
                     reason=(
-                        f"Hybrid HOLD (XGB 저신뢰 conf={buy_conf_str} "
-                        f"< {self._xgb_buy_threshold:.2f} — 진입 보류)"
+                        f"Hybrid HOLD ({self._ml_label} 저신뢰 conf={buy_conf_str} "
+                        f"< {self._ml_buy_threshold:.2f} — 진입 보류)"
                     ),
                 )
 
@@ -185,17 +198,26 @@ class FactorHybridStrategy(BaseStrategy):
                     "entry_price": float(price),
                     "entry_date": entry_date,
                 }
+                # strength 는 confidence-proportional sizing 의 신호:
+                # ml_buy_prob 이 None 인 경우 0.85 기본값(legacy 호환).
+                # buy_threshold→0, 1.0→1 선형 매핑 후 0.5~1.0 구간으로 클램핑.
+                if ml_buy_prob is None:
+                    strength = 0.85
+                else:
+                    span = max(1.0 - self._ml_buy_threshold, 1e-6)
+                    norm = (ml_buy_prob - self._ml_buy_threshold) / span
+                    strength = float(min(max(0.5 + 0.5 * norm, 0.5), 1.0))
                 return TradeSignal(
                     signal=Signal.BUY, stock_code=stock_code, stock_name=stock_name,
-                    price=price, strength=0.85,
-                    reason=f"Hybrid BUY (XGB conf={buy_conf_str} + RL 동의)",
+                    price=price, strength=strength,
+                    reason=f"Hybrid BUY ({self._ml_label} conf={buy_conf_str} + RL 동의, size={strength:.2f})",
                 )
             else:
-                # XGB 고신뢰 BUY지만 RL이 거부 → HOLD (RL이 타이밍 리스크 차단)
+                # Alpha 고신뢰 BUY지만 RL이 거부 → HOLD (RL이 타이밍 리스크 차단)
                 return TradeSignal(
                     signal=Signal.HOLD, stock_code=stock_code, price=price,
                     reason=(
-                        f"Hybrid HOLD (XGB BUY conf={buy_conf_str}, RL 거부 — "
+                        f"Hybrid HOLD ({self._ml_label} BUY conf={buy_conf_str}, RL 거부 — "
                         f"타이밍 부적절)"
                     ),
                 )

@@ -112,13 +112,15 @@ class StrategyInvariantTests(unittest.TestCase):
         strategy.ml_predictor = Mock()
         strategy.rl_predictor = Mock()
         strategy.ml_predictor.predict.return_value = 1
-        # XGB BUY confidence — invariant test 는 신뢰도 통과로 가정 (None = legacy 호환)
+        # Alpha BUY confidence — invariant test 는 신뢰도 통과로 가정 (None = legacy 호환)
         strategy.ml_predictor.predict_proba_last.return_value = None
         strategy.rl_predictor.predict_with_position.return_value = 0
         strategy._buy_threshold = 0.07
         strategy._sell_threshold = 0.06
-        strategy._xgb_sell_threshold = 0.60
-        strategy._xgb_buy_threshold = 0.55
+        strategy._ml_sell_threshold = 0.60
+        strategy._ml_buy_threshold = 0.55
+        strategy._ml_label = "XGB"
+        strategy._ml_model_type = "xgboost"
         strategy._positions = {}
         strategy._pool = {"AAA"}
         strategy._current_date = None
@@ -142,7 +144,9 @@ class StrategyInvariantTests(unittest.TestCase):
         strategy.rl_predictor.predict_with_position.return_value = 0
         strategy._buy_threshold = 0.07
         strategy._sell_threshold = 0.06
-        strategy._xgb_sell_threshold = 0.60
+        strategy._ml_sell_threshold = 0.60
+        strategy._ml_label = "XGB"
+        strategy._ml_model_type = "xgboost"
         strategy._positions = {"AAA": {"entry_price": 100.0, "entry_date": "20240115"}}
         strategy._pool = {"AAA"}
         strategy._current_date = "20240301"
@@ -173,6 +177,58 @@ class StrategyInvariantTests(unittest.TestCase):
             )
 
         # config max_position_pct=5% -> 500,000 won cap -> 50 shares
+        self.assertEqual(qty, 50)
+
+    def test_confidence_sizing_scales_with_strength(self) -> None:
+        # strength=0.6 → 0.6× slot. 50주 → 30주 기대.
+        signal = TradeSignal(signal=Signal.BUY, stock_code="AAA", price=10_000, strength=0.6)
+        risk_mgr = RiskManager(account=Mock())
+        risk_mgr.config.confidence_sizing_enabled = True
+        risk_mgr.config.confidence_sizing_min_mult = 0.5
+        risk_mgr.config.confidence_sizing_max_mult = 1.0
+
+        with patch.object(RiskManager, "is_trading_allowed", new_callable=PropertyMock, return_value=True):
+            qty = risk_mgr.calculate_position_size(
+                signal=signal,
+                available_cash=1_000_000,
+                total_assets=10_000_000,
+                current_positions=0,
+            )
+
+        self.assertEqual(qty, 30)
+
+    def test_confidence_sizing_clamps_below_min(self) -> None:
+        # strength=0.2 → min 0.5 로 클램프. 50주 → 25주 기대.
+        signal = TradeSignal(signal=Signal.BUY, stock_code="AAA", price=10_000, strength=0.2)
+        risk_mgr = RiskManager(account=Mock())
+        risk_mgr.config.confidence_sizing_enabled = True
+        risk_mgr.config.confidence_sizing_min_mult = 0.5
+        risk_mgr.config.confidence_sizing_max_mult = 1.0
+
+        with patch.object(RiskManager, "is_trading_allowed", new_callable=PropertyMock, return_value=True):
+            qty = risk_mgr.calculate_position_size(
+                signal=signal,
+                available_cash=1_000_000,
+                total_assets=10_000_000,
+                current_positions=0,
+            )
+
+        self.assertEqual(qty, 25)
+
+    def test_confidence_sizing_disabled_keeps_uniform(self) -> None:
+        # 플래그 OFF → strength 무시.
+        signal = TradeSignal(signal=Signal.BUY, stock_code="AAA", price=10_000, strength=0.6)
+        risk_mgr = RiskManager(account=Mock())
+        risk_mgr.config.confidence_sizing_enabled = False
+
+        with patch.object(RiskManager, "is_trading_allowed", new_callable=PropertyMock, return_value=True):
+            qty = risk_mgr.calculate_position_size(
+                signal=signal,
+                available_cash=1_000_000,
+                total_assets=10_000_000,
+                current_positions=0,
+            )
+
         self.assertEqual(qty, 50)
 
 
