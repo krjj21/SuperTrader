@@ -393,6 +393,44 @@ class RLTimingModel:
             return -1  # SELL
         return 0       # HOLD
 
+    def predict_with_position_with_probs(
+        self,
+        X: pd.DataFrame,
+        holding: bool = False,
+        unrealized_pnl: float = 0.0,
+        holding_days: int = 0,
+        buy_threshold: float = 0.08,
+        sell_threshold: float = 0.05,
+    ) -> tuple[int, np.ndarray | None]:
+        """predict_with_position 과 동일 의사결정 + raw action probs([HOLD,BUY,SELL]) 도 반환."""
+        self.actor.eval()
+        mask = X.notna().all(axis=1)
+        if not mask.any():
+            return 0, None
+
+        last_valid = X[mask].iloc[[-1]].values.astype(np.float32)
+        position_state = np.array([[
+            1.0 if holding else 0.0,
+            unrealized_pnl,
+            min(holding_days / 20.0, 1.0),
+        ]], dtype=np.float32)
+        X_full = np.concatenate([last_valid, position_state], axis=1)
+
+        with torch.no_grad():
+            state = torch.FloatTensor(X_full).to(self.device)
+            probs, _ = self.actor(state)
+            p = probs.squeeze(0).cpu().numpy()
+
+        self.actor.train()
+
+        if not holding and p[1] > buy_threshold:
+            action = 1
+        elif holding and p[2] > sell_threshold:
+            action = -1
+        else:
+            action = 0
+        return action, p
+
     def predict_proba(self, X: pd.DataFrame) -> np.ndarray:
         """행동 확률을 반환합니다."""
         self.actor.eval()

@@ -61,10 +61,13 @@ class FactorConfig(BaseModel):
     min_ir: float = 0.3
     neutralize_industry: bool = True
     neutralize_market_cap: bool = True
-    # 외국인 매매 사전 필터 (build_stock_pool 진입 시 적용)
+    # 투자자 매매 사전 필터 (build_stock_pool 진입 시 적용)
     foreign_filter_enabled: bool = False  # True 시 sappo_investor_trading 활용
-    foreign_filter_pct: float = 0.5       # 누적 외국인 순매수 상위 N% 통과 (0.5 = 상위 50%)
+    foreign_filter_pct: float = 0.5       # 누적 순매수 상위 N% 통과 (0.5 = 상위 50%)
     foreign_filter_lookback: int = 20     # 누적 일수 (영업일)
+    # 모드: foreign(외국인만) | foreign_organ(외국인+기관 합산, B1)
+    # 한국 시장 3축(외국인/기관/개인)에서 기관까지 묶으면 신호 표면적이 늘어난다.
+    investor_filter_mode: str = "foreign"
 
 
 class MACDParams(BaseModel):
@@ -142,6 +145,13 @@ class RLParams(BaseModel):
     # Ensemble: N개 시드로 학습 후 median Sharpe 모델 채택. 빈 리스트 → 단일 시드(42)
     # GPU 시간 N배 비용으로 시드 변동 ±0.3~0.5 회귀 위험 큰 폭 감소
     ensemble_seeds: list[int] = []
+    # Profit-aware adaptive SELL threshold (#3).
+    # 보유 중 unrealized_pnl 이 floor 이상이면 ml_sell_threshold 를 선형 인하해 익절 발화율 ↑.
+    # XGB p_sell 이 추세장에서 0.50 부근에 갇혀 0.60 게이트를 못 넘는 구조 보정.
+    profit_aware_sell_enabled: bool = True
+    profit_aware_sell_pnl_floor: float = 0.10      # 이 이하면 변경 없음
+    profit_aware_sell_max_discount: float = 0.20   # 최대 인하 비율 (예: 0.20 → 0.60 × 0.80 = 0.48)
+    profit_aware_sell_pnl_ceiling: float = 0.30    # 이 이상에서 max_discount 적용
 
 
 class TimingConfig(BaseModel):
@@ -191,6 +201,12 @@ class RiskConfig(BaseModel):
     confidence_sizing_mode: str = "clamp"
     confidence_sizing_min_mult: float = 0.5
     confidence_sizing_max_mult: float = 1.0
+    # E1 변동성 진입 게이트: BUY 신호 ATR/price 가 임계 이상이면 거부.
+    # stop_loss(-7%) 이전에 변동성 자체로 진입을 차단해 -7% 손절 빈도를 줄인다.
+    # SELL 은 절대 차단하지 않는다 (잘못된 매도 차단 = 손실 누적).
+    atr_filter_enabled: bool = False
+    atr_filter_max_pct: float = 0.05
+    atr_filter_period: int = 14
 
 
 class ScheduleConfig(BaseModel):

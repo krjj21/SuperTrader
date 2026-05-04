@@ -41,6 +41,7 @@ class RegimeResult:
     llm_score: float | None
     overridden_by_llm: bool
     notes: str = ""
+    macro_features: dict[str, float] | None = None  # A1+A2: USD/KRW + VIX 최신값
 
     @property
     def hmm_probs_tuple(self) -> tuple[float, float, float]:
@@ -91,14 +92,65 @@ class RegimeDetector:
             df.rename(columns={df.columns[0]: "date"}, inplace=True)
         return df[["date", "open", "high", "low", "close", "volume"]]
 
-    def _build_features(self, kospi_df: pd.DataFrame) -> pd.DataFrame:
-        """일별 (log-return, 20일 rolling vol) feature 매트릭스."""
+    def _build_features(self, kospi_df: pd.DataFrame, end_date: str | None = None) -> pd.DataFrame:
+        """일별 (log-return, 20일 rolling vol) feature 매트릭스.
+
+        매크로 feature 사용 가능 시 (USD/KRW + VIX) 6D 로 확장.
+        DB 에 데이터 없으면 KOSPI 2D 만으로 fallback (graceful — A1+A2 dark-launch).
+        """
         df = kospi_df.copy()
         df["log_ret"] = np.log(df["close"]).diff()
         df["roll_vol"] = df["log_ret"].rolling(20).std()
         df = df.dropna(subset=["log_ret", "roll_vol"]).reset_index(drop=True)
         # 마지막 lookback_days 만 사용
-        return df.tail(self.lookback_days).reset_index(drop=True)
+        feats = df.tail(self.lookback_days).reset_index(drop=True)
+
+        # 매크로 overlay (A1+A2): sappo_macro_features 가 비어있거나 결측이면 KOSPI-only
+        try:
+            from src.db.sappo_models import get_macro_features_window
+            macro_rows = get_macro_features_window(
+                end_date or datetime.now().strftime("%Y%m%d"),
+                days=self.lookback_days * 2 + 30,  # 휴장일 여유
+            )
+            if not macro_rows:
+                return feats
+            macro_df = pd.DataFrame([
+                {
+                    "macro_date": r.date,
+                    "usdkrw_log_ret": float(r.usdkrw_log_ret or 0.0),
+                    "usdkrw_vol_20d": float(r.usdkrw_vol_20d or 0.0),
+                    "vix_log_ret": float(r.vix_log_ret or 0.0),
+                    "vix_close": float(r.vix_close or 0.0),
+                }
+                for r in macro_rows
+            ])
+            # KOSPI 의 date 컬럼과 inner join 위해 macro_date 를 datetime 으로
+            macro_df["macro_date"] = pd.to_datetime(macro_df["macro_date"], format="%Y%m%d")
+            feats = feats.copy()
+            feats["join_date"] = pd.to_datetime(feats["date"]).dt.normalize()
+            macro_df = macro_df.set_index("macro_date").sort_index()
+            # 가장 가까운 과거 macro 매칭 (asof) — 거래일정 mismatch 흡수
+            feats["usdkrw_log_ret"] = feats["join_date"].map(
+                lambda d: macro_df["usdkrw_log_ret"].asof(d) if not pd.isna(d) else 0.0
+            )
+            feats["usdkrw_vol_20d"] = feats["join_date"].map(
+                lambda d: macro_df["usdkrw_vol_20d"].asof(d) if not pd.isna(d) else 0.0
+            )
+            feats["vix_log_ret"] = feats["join_date"].map(
+                lambda d: macro_df["vix_log_ret"].asof(d) if not pd.isna(d) else 0.0
+            )
+            # VIX z-score (60일 표본 안에서 z-score 로 정규화 — 분포 평탄화)
+            vix_close_series = feats["join_date"].map(
+                lambda d: macro_df["vix_close"].asof(d) if not pd.isna(d) else np.nan
+            ).astype(float)
+            vix_mean = vix_close_series.mean()
+            vix_std = vix_close_series.std() if vix_close_series.std() > 0 else 1.0
+            feats["vix_z"] = (vix_close_series - vix_mean) / vix_std
+            feats = feats.drop(columns=["join_date"])
+            feats = feats.fillna(0.0)
+        except Exception as e:
+            logger.warning(f"매크로 feature join 실패 — KOSPI-only fallback: {e}")
+        return feats
 
     def _fetch_market_sentiment(self, date: str) -> float | None:
         """sappo_sentiment_scores 에서 stock_code='_MARKET_' 의 sentiment 점수 (없으면 None)."""
@@ -129,20 +181,27 @@ class RegimeDetector:
         Returns:
             (last_cluster_idx, last_posterior(K,), cluster_to_label, ret_60d, vol_60d_annualized)
         """
-        X = feats[["log_ret", "roll_vol"]].values
+        # 매크로 feature 가 있으면 6D, 없으면 KOSPI 2D (A1+A2 dark-launch fallback)
+        feature_cols = ["log_ret", "roll_vol"]
+        for opt_col in ("usdkrw_log_ret", "usdkrw_vol_20d", "vix_log_ret", "vix_z"):
+            if opt_col in feats.columns:
+                feature_cols.append(opt_col)
+        X = feats[feature_cols].values
+        # 차원 ↑ 시 reg_covar 도 ↑ (60×6=360 datapoint 안정성)
+        reg_cov = 1e-4 if X.shape[1] > 2 else 1e-5
         gmm = GaussianMixture(
             n_components=self.n_states,
             covariance_type="full",
             random_state=self.random_state,
             n_init=3,
-            reg_covar=1e-5,
+            reg_covar=reg_cov,
         )
         gmm.fit(X)
         post = gmm.predict_proba(X)              # (T, K)
         last_post = post[-1]
         last_cluster = int(np.argmax(last_post))
 
-        # cluster 별 통계
+        # cluster 별 통계 — 라벨 할당은 KOSPI 컬럼(idx 0=ret, 1=vol) 기준 유지
         clusters = gmm.predict(X)
         cluster_stats: list[tuple[int, float, float]] = []
         for k in range(self.n_states):
@@ -232,7 +291,7 @@ class RegimeDetector:
     def detect_today(self, date: str | None = None) -> RegimeResult:
         date_str = date or datetime.now().strftime("%Y%m%d")
         kospi = self._fetch_kospi(end=date_str)
-        feats = self._build_features(kospi)
+        feats = self._build_features(kospi, end_date=date_str)
         if len(feats) < max(20, self.n_states * 5):
             raise RuntimeError(
                 f"KOSPI feature 부족 ({len(feats)}일) — lookback {self.lookback_days} 점검"
@@ -257,6 +316,17 @@ class RegimeDetector:
             notes_parts.append(smooth_note)
         notes = "; ".join(notes_parts)
 
+        # A1+A2: 매크로 feature 가 join 됐다면 마지막 행 값 첨부 (보고/저장 용)
+        macro_payload: dict[str, float] | None = None
+        if "usdkrw_log_ret" in feats.columns:
+            last_row = feats.iloc[-1]
+            macro_payload = {
+                "usdkrw_log_ret": float(last_row.get("usdkrw_log_ret", 0.0)),
+                "usdkrw_vol_20d": float(last_row.get("usdkrw_vol_20d", 0.0)),
+                "vix_log_ret": float(last_row.get("vix_log_ret", 0.0)),
+                "vix_z": float(last_row.get("vix_z", 0.0)),
+            }
+
         result = RegimeResult(
             label=final_label,
             hmm_state=cluster,
@@ -266,6 +336,7 @@ class RegimeDetector:
             llm_score=llm_score,
             overridden_by_llm=overridden,
             notes=notes,
+            macro_features=macro_payload,
         )
         logger.info(
             f"[REGIME] {date_str} label={final_label} cluster={cluster} "

@@ -58,6 +58,28 @@ class TimingPredictor:
             )
         return self.predict(df)
 
+    def predict_with_position_with_probs(
+        self,
+        df: pd.DataFrame,
+        holding: bool = False,
+        unrealized_pnl: float = 0.0,
+        holding_days: int = 0,
+        buy_threshold: float = 0.08,
+        sell_threshold: float = 0.05,
+    ):
+        """predict_with_position 과 동일 + raw probs ([HOLD,BUY,SELL]) 함께 반환.
+
+        모델이 미지원이면 (action_int, None).
+        """
+        if hasattr(self.model, "predict_with_position_with_probs"):
+            features = build_features(df)
+            return self.model.predict_with_position_with_probs(
+                features, holding, unrealized_pnl, holding_days,
+                buy_threshold=buy_threshold,
+                sell_threshold=sell_threshold,
+            )
+        return (self.predict(df), None)
+
     def predict_proba_last(self, df: pd.DataFrame, label: int = -1) -> float | None:
         """최근 bar 의 특정 라벨 예측 확률을 반환합니다.
 

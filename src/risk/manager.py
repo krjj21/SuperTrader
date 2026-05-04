@@ -223,9 +223,13 @@ class RiskManager:
         signal: TradeSignal,
         quantity: int,
         balance: AccountSummary,
+        df=None,
     ) -> tuple[bool, str]:
         """주문 전 최종 검증을 수행합니다.
 
+        Args:
+            df: ATR 게이트 평가용 OHLCV DataFrame (라이브/백테스트 동일).
+                None 이면 변동성 게이트 건너뜀 (atr_filter_enabled 와 무관).
         Returns:
             (통과 여부, 사유)
         """
@@ -243,5 +247,28 @@ class RiskManager:
             # 일일 손실 한도 재확인
             if not self.check_daily_loss_limit(balance.total_pnl, balance.total_eval):
                 return False, "일일 손실 한도 초과"
+
+            # E1 변동성 진입 게이트 (BUY 만 적용 — SELL 은 절대 차단 X)
+            if (
+                getattr(self.config, "atr_filter_enabled", False)
+                and df is not None
+                and len(df) >= int(getattr(self.config, "atr_filter_period", 14))
+            ):
+                try:
+                    from src.data.indicators import calc_atr
+                    period = int(getattr(self.config, "atr_filter_period", 14))
+                    atr_val = float(calc_atr(df["high"], df["low"], df["close"], period=period).iloc[-1])
+                    close_val = float(df["close"].iloc[-1])
+                    if close_val > 0:
+                        atr_pct = atr_val / close_val
+                        max_pct = float(getattr(self.config, "atr_filter_max_pct", 0.05))
+                        if atr_pct > max_pct:
+                            return False, (
+                                f"변동성 초과: ATR/price={atr_pct:.3f} > {max_pct:.3f} "
+                                f"(period={period})"
+                            )
+                except Exception as e:
+                    # ATR 계산 실패는 게이트를 통과시키되 경고 (가용성 우선)
+                    logger.warning(f"ATR 게이트 평가 실패: {e} — 통과 처리")
 
         return True, "OK"

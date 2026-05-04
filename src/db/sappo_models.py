@@ -197,6 +197,27 @@ class InvestorTrading(SappoBase):
 
 
 # ══════════════════════════════════════════════════════════════
+# 8. 매크로 feature (USD/KRW + VIX) — A1+A2 라운드 6
+# ══════════════════════════════════════════════════════════════
+class MacroFeature(SappoBase):
+    """일자별 매크로 지표 — Regime Detector 입력 보강용.
+
+    sappo_regime_labels 와 1:1 (date PK) 관계. 별도 테이블로 둔 이유:
+    - lifecycle 분리 (FDR 외부 의존성, 실패 시 KOSPI-only fallback)
+    - 후일 macro feature 만 별도 분석할 때 join 만으로 가능
+    """
+    __tablename__ = "sappo_macro_features"
+
+    date = Column(String(8), primary_key=True)              # YYYYMMDD
+    usdkrw_close = Column(Float, default=0.0)
+    usdkrw_log_ret = Column(Float, default=0.0)             # 1일 log-return
+    usdkrw_vol_20d = Column(Float, default=0.0)             # 20일 rolling std
+    vix_close = Column(Float, default=0.0)
+    vix_log_ret = Column(Float, default=0.0)
+    fetched_at = Column(DateTime, default=datetime.now)
+
+
+# ══════════════════════════════════════════════════════════════
 # DB 초기화 / 세션
 # ══════════════════════════════════════════════════════════════
 _engine = None
@@ -472,6 +493,40 @@ def get_foreign_net_buy_cumulative(
         session.close()
 
 
+def get_combined_net_buy_cumulative(
+    stock_code: str,
+    end_date: str,
+    days: int = 20,
+) -> tuple[int, int]:
+    """end_date 까지 직전 N영업일 외국인+기관 순매수 누적값.
+
+    한국 시장은 외국인·기관·개인 3축 — 외국인만 보면 신호의 절반만 활용.
+    organ_net_amount 가 NULL 인 종목은 foreign 단독으로 fallback (graceful).
+
+    Returns:
+        (cum_amount, n_days_used)
+    """
+    session = get_sappo_session()
+    try:
+        rows = (
+            session.query(InvestorTrading)
+            .filter(
+                InvestorTrading.stock_code == stock_code,
+                InvestorTrading.date <= end_date,
+            )
+            .order_by(InvestorTrading.date.desc())
+            .limit(days)
+            .all()
+        )
+        cum = sum(
+            int(r.foreign_net_amount or 0) + int(r.organ_net_amount or 0)
+            for r in rows
+        )
+        return cum, len(rows)
+    finally:
+        session.close()
+
+
 def upsert_regime_label(
     date: str,
     label: str,
@@ -533,6 +588,56 @@ def get_regime_for(date: str) -> RegimeLabel | None:
     session = get_sappo_session()
     try:
         return session.query(RegimeLabel).filter_by(date=date).first()
+    finally:
+        session.close()
+
+
+def upsert_macro_feature(
+    date: str,
+    usdkrw_close: float = 0.0,
+    usdkrw_log_ret: float = 0.0,
+    usdkrw_vol_20d: float = 0.0,
+    vix_close: float = 0.0,
+    vix_log_ret: float = 0.0,
+) -> None:
+    """일자별 매크로 feature upsert."""
+    session = get_sappo_session()
+    try:
+        existing = session.query(MacroFeature).filter_by(date=date).first()
+        if existing:
+            existing.usdkrw_close = float(usdkrw_close)
+            existing.usdkrw_log_ret = float(usdkrw_log_ret)
+            existing.usdkrw_vol_20d = float(usdkrw_vol_20d)
+            existing.vix_close = float(vix_close)
+            existing.vix_log_ret = float(vix_log_ret)
+        else:
+            session.add(MacroFeature(
+                date=date,
+                usdkrw_close=float(usdkrw_close),
+                usdkrw_log_ret=float(usdkrw_log_ret),
+                usdkrw_vol_20d=float(usdkrw_vol_20d),
+                vix_close=float(vix_close),
+                vix_log_ret=float(vix_log_ret),
+            ))
+        session.commit()
+    finally:
+        session.close()
+
+
+def get_macro_features_window(end_date: str, days: int = 60) -> list[MacroFeature]:
+    """end_date 까지 직전 N영업일 매크로 feature 시계열."""
+    session = get_sappo_session()
+    try:
+        rows = (
+            session.query(MacroFeature)
+            .filter(MacroFeature.date <= end_date)
+            .order_by(MacroFeature.date.desc())
+            .limit(days)
+            .all()
+        )
+        # 시간 오름차순 반환 (detector 가 시계열로 사용)
+        rows.reverse()
+        return rows
     finally:
         session.close()
 

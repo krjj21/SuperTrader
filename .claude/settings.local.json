@@ -35,7 +35,10 @@
       "Bash(echo \"web PID=$!\" sleep 5 ps -ef)",
       "Bash(/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe *)",
       "Bash(echo \"live PID=$!\")",
-      "Bash(python3 *)"
+      "Bash(python3 *)",
+      "Bash(PYTHONPATH=. ./venv/Scripts/python.exe *)",
+      "Bash(./venv/Scripts/python.exe -m unittest tests.test_strategy_invariants -v)",
+      "Bash(./venv/Scripts/python.exe scripts/_diag_047040_sell.py)"
     ]
   }
 }

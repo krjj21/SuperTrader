@@ -381,7 +381,12 @@ def run_live() -> None:
                         logger.error(f"풀 퇴출 매도 실패: {pos.stock_code} - {e}")
             signal_summary = {"BUY": 0, "SELL": 0, "HOLD": 0, "error": 0}
             for code in pool_codes:
-                ohlcv = client.get_daily_ohlcv(code)
+                try:
+                    ohlcv = client.get_daily_ohlcv(code)
+                except Exception as e:
+                    logger.warning(f"일봉 조회 실패 [{code}] — 스킵: {e}")
+                    signal_summary["error"] += 1
+                    continue
                 if not ohlcv:
                     signal_summary["error"] += 1
                     continue
@@ -395,6 +400,12 @@ def run_live() -> None:
                 if not signal.stock_name:
                     signal.stock_name = stock_name
                 signal_summary[signal.signal.value] = signal_summary.get(signal.signal.value, 0) + 1
+
+                # 모델 추론 로그 (#4) — 전략이 _last_diag 를 노출하면 jsonl 적재
+                diag = getattr(strategy, "_last_diag", None)
+                if diag:
+                    from src.runtime.inference_logger import log_inference
+                    log_inference(code, stock_name, signal.signal.value, diag)
 
                 if signal.is_actionable:
                     # LLM 검증: ML 시그널을 기술적 맥락에서 확인
@@ -425,7 +436,7 @@ def run_live() -> None:
                             regime_label=_current_regime[0],
                         )
                         if qty > 0:
-                            valid, reason = risk_mgr.validate_order(signal, qty, balance)
+                            valid, reason = risk_mgr.validate_order(signal, qty, balance, df=df)
                             if valid:
                                 order = order_mgr.buy(code, qty, reference_price=int(signal.price))
                                 if order.order_no:
@@ -683,8 +694,34 @@ def run_live() -> None:
             return
         try:
             from src.regime.detector import RegimeDetector
-            from src.db.sappo_models import upsert_regime_label
+            from src.db.sappo_models import upsert_regime_label, upsert_macro_feature
             today = datetime.now().strftime("%Y%m%d")
+
+            # A1+A2: macro feature(USD/KRW + VIX) 당일치 incremental fetch
+            try:
+                import FinanceDataReader as fdr
+                import numpy as np
+                start = (datetime.now() - timedelta(days=40)).strftime("%Y-%m-%d")
+                end = datetime.now().strftime("%Y-%m-%d")
+                usd = fdr.DataReader("USD/KRW", start, end)
+                vix = fdr.DataReader("VIX", start, end)
+                if not usd.empty and not vix.empty:
+                    usd_close = float(usd["Close"].iloc[-1])
+                    usd_prev = float(usd["Close"].iloc[-2]) if len(usd) >= 2 else usd_close
+                    vix_close = float(vix["Close"].iloc[-1])
+                    vix_prev = float(vix["Close"].iloc[-2]) if len(vix) >= 2 else vix_close
+                    upsert_macro_feature(
+                        date=today,
+                        usdkrw_close=usd_close,
+                        usdkrw_log_ret=float(np.log(usd_close / usd_prev)) if usd_prev > 0 else 0.0,
+                        usdkrw_vol_20d=float(np.log(usd["Close"]).diff().tail(20).std()),
+                        vix_close=vix_close,
+                        vix_log_ret=float(np.log(vix_close / vix_prev)) if vix_prev > 0 else 0.0,
+                    )
+                    logger.info(f"[MACRO] {today} usdkrw={usd_close:.2f} vix={vix_close:.2f} 저장")
+            except Exception as me:
+                logger.warning(f"[MACRO] daily fetch 실패: {me} — detect 는 KOSPI-only fallback")
+
             result = RegimeDetector().detect_today(today)
             upsert_regime_label(
                 date=today,

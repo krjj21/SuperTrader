@@ -49,6 +49,11 @@ def _payload() -> dict:
         "exclude_sectors": cfg.universe.exclude_sectors,
         "pit_universe": True,
         "meta_signature": _meta_signature(),
+        # B1: 투자자 필터 모드 변경 시 풀 구성이 달라지므로 캐시 무효화
+        "foreign_filter_enabled": getattr(cfg.factors, "foreign_filter_enabled", False),
+        "foreign_filter_pct": getattr(cfg.factors, "foreign_filter_pct", 0.5),
+        "foreign_filter_lookback": getattr(cfg.factors, "foreign_filter_lookback", 20),
+        "investor_filter_mode": getattr(cfg.factors, "investor_filter_mode", "foreign"),
     }
 
 

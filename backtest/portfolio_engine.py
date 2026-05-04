@@ -239,11 +239,18 @@ class PortfolioBacktestEngine:
             self._conf_sizing_mode = str(getattr(_risk_cfg, "confidence_sizing_mode", "clamp"))
             self._conf_sizing_min = float(getattr(_risk_cfg, "confidence_sizing_min_mult", 0.5))
             self._conf_sizing_max = float(getattr(_risk_cfg, "confidence_sizing_max_mult", 1.0))
+            # E1 변동성 필터 (BUY 진입 게이트, 라이브 RiskManager.validate_order 와 동일 공식)
+            self._atr_filter_enabled = bool(getattr(_risk_cfg, "atr_filter_enabled", False))
+            self._atr_filter_max_pct = float(getattr(_risk_cfg, "atr_filter_max_pct", 0.05))
+            self._atr_filter_period = int(getattr(_risk_cfg, "atr_filter_period", 14))
         except Exception:
             self._conf_sizing_enabled = False
             self._conf_sizing_mode = "clamp"
             self._conf_sizing_min = 0.5
             self._conf_sizing_max = 1.0
+            self._atr_filter_enabled = False
+            self._atr_filter_max_pct = 0.05
+            self._atr_filter_period = 14
 
         for i, date in enumerate(all_dates):
             # ── 1. 전일 시그널의 주문을 당일 시가로 체결 ──
@@ -350,6 +357,22 @@ class PortfolioBacktestEngine:
                         code, signal.stock_name, "BUY", signal.reason, df_until, date,
                     ):
                         continue
+                    # E1 변동성 게이트 (라이브 RiskManager.validate_order 와 동일)
+                    if (
+                        self._atr_filter_enabled
+                        and len(df_until) >= self._atr_filter_period
+                    ):
+                        try:
+                            from src.data.indicators import calc_atr
+                            atr_val = float(calc_atr(
+                                df_until["high"], df_until["low"], df_until["close"],
+                                period=self._atr_filter_period,
+                            ).iloc[-1])
+                            close_val = float(df_until["close"].iloc[-1])
+                            if close_val > 0 and atr_val / close_val > self._atr_filter_max_pct:
+                                continue  # 변동성 초과 — 진입 거부
+                        except Exception:
+                            pass  # 평가 실패 시 통과 (가용성 우선)
                     pending_orders.append(
                         (code, signal.stock_name, "buy", False, float(signal.strength))
                     )

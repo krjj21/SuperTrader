@@ -62,25 +62,35 @@ def build_stock_pool(
 
     codes = universe["code"].tolist()
 
-    # 1-b. 외국인 매매 사전 필터 (foreign_filter_enabled=True 시)
-    # sappo_investor_trading 에서 N영업일 누적 순매수 거래대금 상위 pct% 만 통과
+    # 1-b. 투자자 매매 사전 필터 (foreign_filter_enabled=True 시)
+    # sappo_investor_trading 에서 N영업일 누적 순매수 거래대금 상위 pct% 만 통과.
+    # mode: foreign(외국인만) | foreign_organ(외국인+기관 합산)
     if getattr(config.factors, "foreign_filter_enabled", False):
         try:
-            from src.db.sappo_models import init_sappo_db, get_foreign_net_buy_cumulative
+            from src.db.sappo_models import (
+                init_sappo_db,
+                get_foreign_net_buy_cumulative,
+                get_combined_net_buy_cumulative,
+            )
             init_sappo_db(config.database.path)
             lookback = int(getattr(config.factors, "foreign_filter_lookback", 20))
             pct = float(getattr(config.factors, "foreign_filter_pct", 0.5))
+            mode = str(getattr(config.factors, "investor_filter_mode", "foreign"))
+            net_buy_fn = (
+                get_combined_net_buy_cumulative if mode == "foreign_organ"
+                else get_foreign_net_buy_cumulative
+            )
             scores = []
             n_with_data = 0
             for code in codes:
-                cum, n = get_foreign_net_buy_cumulative(code, date, lookback)
+                cum, n = net_buy_fn(code, date, lookback)
                 # 데이터 부재 종목은 cum=0, n=0 → 중간 위치
                 if n > 0:
                     n_with_data += 1
                 scores.append((code, cum, n))
             if n_with_data == 0:
                 logger.warning(
-                    f"외국인 매매 데이터 0건 (date={date}) — 필터 skip. "
+                    f"투자자 매매 데이터 0건 (date={date}, mode={mode}) — 필터 skip. "
                     f"scripts/fetch_foreign_buys.py --universe all 실행 필요"
                 )
             else:
@@ -90,14 +100,14 @@ def build_stock_pool(
                 before = len(codes)
                 codes = [c for c in codes if c in allowed]
                 logger.info(
-                    f"외국인 매매 필터: {before}→{len(codes)}종목 "
+                    f"투자자 매매 필터({mode}): {before}→{len(codes)}종목 "
                     f"(상위 {pct*100:.0f}%, lookback={lookback}일, "
                     f"데이터 보유 {n_with_data}/{before})"
                 )
                 # universe도 함께 좁힘 (이후 단계에서 일관성)
                 universe = universe[universe["code"].isin(codes)].reset_index(drop=True)
         except Exception as e:
-            logger.warning(f"외국인 매매 필터 적용 실패: {e} — skip")
+            logger.warning(f"투자자 매매 필터 적용 실패: {e} — skip")
 
     # 2. 크로스섹션 팩터 계산
     factor_df = compute_cross_sectional_factors(codes, date, ohlcv_dict=ohlcv_dict)
