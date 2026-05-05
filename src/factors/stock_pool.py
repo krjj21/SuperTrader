@@ -38,6 +38,7 @@ def build_stock_pool(
     ohlcv_dict: dict[str, pd.DataFrame] | None = None,
     return_factors: bool = False,
     regime_label: str | None = None,
+    factor_panel: dict[str, pd.DataFrame] | None = None,
 ) -> StockPool | tuple[StockPool, pd.DataFrame]:
     """주어진 날짜의 종목풀을 구성합니다.
 
@@ -110,7 +111,9 @@ def build_stock_pool(
             logger.warning(f"투자자 매매 필터 적용 실패: {e} — skip")
 
     # 2. 크로스섹션 팩터 계산
-    factor_df = compute_cross_sectional_factors(codes, date, ohlcv_dict=ohlcv_dict)
+    factor_df = compute_cross_sectional_factors(
+        codes, date, ohlcv_dict=ohlcv_dict, factor_panel=factor_panel,
+    )
     if factor_df.empty:
         return StockPool(date=date, codes=[])
 

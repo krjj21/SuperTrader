@@ -166,6 +166,92 @@ class StrategyInvariantTests(unittest.TestCase):
         signal = strategy.generate_signal("AAA", df, stock_name="AAA", current_date="2024-03-01")
         self.assertEqual(signal.signal, Signal.SELL)
 
+    def test_factor_panel_matches_per_rebalance_compute(self) -> None:
+        # B1: build_factor_panel 결과를 슬라이스한 cross-section 이 per-rebalance compute 와 동일.
+        from src.factors.calculator import (
+            build_factor_panel, compute_cross_sectional_factors, _slice_panel_at_date,
+        )
+
+        # 작은 universe + 충분한 길이 OHLCV
+        n = 120
+        codes = ["AAA", "BBB"]
+        ohlcv = {}
+        for c in codes:
+            base = 100.0 + (10 if c == "AAA" else 20)
+            df = _make_ohlcv(
+                [pd.Timestamp("2024-01-01") + pd.Timedelta(days=i) for i in range(n)],
+                [base + (i % 5) for i in range(n)],
+                [base + 1 + (i % 5) for i in range(n)],
+            )
+            df["date"] = pd.to_datetime(df["date"])
+            ohlcv[c] = df
+
+        # panel 1회 빌드
+        panel = build_factor_panel(ohlcv)
+        self.assertEqual(set(panel.keys()), set(codes))
+
+        # 임의 날짜 3개 — panel slice vs 직접 compute 동치
+        for date in ["20240301", "20240315", "20240401"]:
+            sliced = _slice_panel_at_date(panel, codes, date)
+            direct = compute_cross_sectional_factors(
+                codes, date, ohlcv_dict=ohlcv, factor_panel=None,
+            )
+            # 인덱스/컬럼 정렬
+            self.assertEqual(set(sliced.index), set(direct.index))
+            common_cols = list(set(sliced.columns) & set(direct.columns))
+            self.assertGreater(len(common_cols), 50)
+            sub_a = sliced.loc[sorted(sliced.index), common_cols].fillna(-9999.0)
+            sub_b = direct.loc[sorted(direct.index), common_cols].fillna(-9999.0)
+            # 동일 입력 → 동일 출력 (펀더멘털 fund_df 는 양쪽 모두 join 시 동일)
+            pd.testing.assert_frame_equal(
+                sub_a, sub_b, check_dtype=False, atol=1e-9, rtol=1e-9,
+            )
+
+    def test_predictor_features_equivalence(self) -> None:
+        # predict(df=df) ↔ predict(features=build_features(df)) 동일 결과 — A1 precompute 회귀 방지.
+        from src.timing.predictor import TimingPredictor
+        from src.timing.features import build_features
+
+        # 60일 이상 OHLCV
+        n = 80
+        df = _make_ohlcv(
+            [f"2024-{(1 + i // 30):02d}-{(i % 30 + 1):02d}" for i in range(n)],
+            [100 + (i % 7) for i in range(n)],
+            [101 + (i % 7) for i in range(n)],
+        )
+
+        # __new__ 로 모델 로드 우회 + Mock 모델 주입
+        pred = TimingPredictor.__new__(TimingPredictor)
+        pred.model_type = "mock"
+        # mock model — predict 만 구현, 내부 features.iloc[-1, 0] 의 부호로 결정
+        class _MockModel:
+            sequence_length = None
+            def predict(self, feats: pd.DataFrame) -> pd.Series:
+                # 마지막 행 첫 컬럼 부호 → 1/0/-1
+                v = float(feats.iloc[-1, 0])
+                sig = 1 if v > 0 else (-1 if v < 0 else 0)
+                return pd.Series([sig], index=[feats.index[-1]])
+            def predict_proba(self, feats: pd.DataFrame) -> pd.DataFrame:
+                v = float(feats.iloc[-1, 0])
+                p_buy = 0.6 if v > 0 else 0.2
+                p_sell = 0.6 if v < 0 else 0.2
+                p_hold = max(0.0, 1.0 - p_buy - p_sell)
+                return pd.DataFrame(
+                    [[p_hold, p_buy, p_sell]],
+                    columns=[0, 1, -1],
+                    index=[feats.index[-1]],
+                )
+        pred.model = _MockModel()
+
+        feats = build_features(df)
+        sig_df = pred.predict(df=df)
+        sig_feat = pred.predict(features=feats)
+        self.assertEqual(sig_df, sig_feat)
+
+        prob_df = pred.predict_proba_last(df=df, label=1)
+        prob_feat = pred.predict_proba_last(features=feats, label=1)
+        self.assertAlmostEqual(prob_df, prob_feat, places=9)
+
     def test_hybrid_profit_aware_lowers_sell_threshold_at_high_pnl(self) -> None:
         # +30% 보유 + ml_sell_prob=0.50 + RL HOLD: profit-aware off → HOLD, on → SELL.
         # 047040 대우건설 +30% 케이스 회귀 방지 (2026-05-04).

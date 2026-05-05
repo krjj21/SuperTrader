@@ -103,8 +103,18 @@ class FactorHybridStrategy(BaseStrategy):
     def generate_signal(
         self, stock_code: str, df: pd.DataFrame, stock_name: str = "",
         current_date: str | None = None,
+        features: pd.DataFrame | None = None,
     ) -> TradeSignal:
         price = int(df["close"].iloc[-1]) if len(df) > 0 else 0
+
+        # A1+A2: features 가 외부(백테스트 precompute)에서 전달되면 그대로 thread.
+        # 미전달 시(라이브) 함수 진입 시 1회만 빌드해 4 군데 predictor 호출에 공유.
+        if features is None and len(df) >= 60:
+            from src.timing.features import build_features as _build
+            try:
+                features = _build(df)
+            except Exception:
+                features = None
 
         if current_date:
             self._current_date = current_date.replace("-", "")
@@ -147,14 +157,14 @@ class FactorHybridStrategy(BaseStrategy):
 
         # ── Alpha Layer: XGBoost 시그널 + 양방향 confidence (진단용) ──
         try:
-            ml_signal = self.ml_predictor.predict(df)  # 1=BUY, -1=SELL, 0=HOLD
+            ml_signal = self.ml_predictor.predict(df=df, features=features)  # 1=BUY, -1=SELL, 0=HOLD
         except Exception:
             ml_signal = 0
         diag["ml_signal"] = int(ml_signal)
         # 양방향 confidence — 모든 사이클 진단 적재 위해 무조건 계산 (~ms 비용)
         try:
-            diag["ml_buy_prob"] = self.ml_predictor.predict_proba_last(df, label=1)
-            diag["ml_sell_prob"] = self.ml_predictor.predict_proba_last(df, label=-1)
+            diag["ml_buy_prob"] = self.ml_predictor.predict_proba_last(df=df, label=1, features=features)
+            diag["ml_sell_prob"] = self.ml_predictor.predict_proba_last(df=df, label=-1, features=features)
         except Exception:
             pass
 
@@ -165,7 +175,8 @@ class FactorHybridStrategy(BaseStrategy):
         # ── RL Layer: predict_with_position_with_probs 로 raw probs 도 캡처 ──
         try:
             rl_signal, rl_probs = self.rl_predictor.predict_with_position_with_probs(
-                df, holding, unrealized_pnl, holding_days,
+                df=df, holding=holding, unrealized_pnl=unrealized_pnl, holding_days=holding_days,
+                features=features,
                 buy_threshold=self._buy_threshold,
                 sell_threshold=self._sell_threshold,
             )

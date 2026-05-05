@@ -219,9 +219,30 @@ def _build_pool_history_factor_based(
             return cached
 
     from src.factors.validity import validate_all_factors
+    from src.factors.calculator import build_factor_panel
 
     config = get_config()
     ic_lookback = int(config.factors.ic_lookback)
+
+    # B1+B2+B3: 팩터 시계열 1회 PRECOMPUTE + 디스크 캐시.
+    # 84 리밸런스 × 30 종목 × compute_all_factors 재계산 (≈2520회) → 종목당 1회 (≈30회).
+    # 캐시 키는 pool_cache 와 동일 — 동일 config + ohlcv 면 parquet 즉시 로드.
+    # 환경변수: SUPER_TRADER_DISABLE_FACTOR_PANEL=1 (메모리 빌드 우회) /
+    #         SUPER_TRADER_DISABLE_FACTOR_CACHE=1 (디스크 캐시 우회)
+    import os as _os
+    factor_panel = None
+    if _os.environ.get("SUPER_TRADER_DISABLE_FACTOR_PANEL", "0") != "1":
+        from src.factors import pool_cache
+        factor_panel = pool_cache.load_factor_panel()
+        if factor_panel is None:
+            try:
+                logger.info(f"  팩터 panel 빌드 시작 ({len(ohlcv_dict)}종목)…")
+                factor_panel = build_factor_panel(ohlcv_dict)
+                if factor_panel:
+                    pool_cache.save_factor_panel(factor_panel)
+            except Exception as e:
+                logger.warning(f"  팩터 panel 빌드 실패 — per-rebalance 폴백: {e}")
+                factor_panel = None
 
     pool_history: dict[str, list[str]] = {}
     factor_history: dict[str, pd.DataFrame] = {}
@@ -259,6 +280,7 @@ def _build_pool_history_factor_based(
             ohlcv_dict=ohlcv_dict,
             factor_report=factor_report,
             return_factors=True,
+            factor_panel=factor_panel,
         )
         if isinstance(result, tuple):
             pool, factor_df = result

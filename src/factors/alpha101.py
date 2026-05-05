@@ -21,8 +21,13 @@ import pandas as pd
 # ═══════════════════════════════════════════════
 
 def _rank(s: pd.Series) -> pd.Series:
-    """Cross-sectional percentile rank (0~1)."""
-    return s.rank(pct=True)
+    """Causal expanding percentile rank (0~1).
+
+    이전: `s.rank(pct=True)` — full-series 랭킹이라 panel 1회 빌드 시 미래 데이터 leakage.
+    변경: `s.expanding().rank(pct=True)` — 각 행 D에서 [0..D] prefix 내 랭킹 (causal).
+    consumed 값은 동일: 기존 per-rebalance 경로도 잘린 df_until 의 .iloc[-1] = 같은 prefix rank.
+    """
+    return s.expanding().rank(pct=True)
 
 
 def _ts_rank(s: pd.Series, window: int) -> pd.Series:

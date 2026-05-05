@@ -48,11 +48,82 @@ def _get_factor_functions() -> tuple:
         return compute_all_factors, get_all_factor_names
 
 
+def build_factor_panel(
+    ohlcv_dict: dict[str, pd.DataFrame],
+) -> dict[str, pd.DataFrame]:
+    """B1: 종목별 팩터 시계열을 1회 계산해 반환.
+
+    `compute_all_factors(df)` 가 종목당 1회만 호출됨 (기존 84 리밸런스 × 30 종목 = 2520회 → 30회).
+    각 리밸런스 시점의 cross-sectional 값은 panel[code].asof(date) 로 슬라이스.
+
+    Args:
+        ohlcv_dict: {code: full OHLCV DataFrame} (date 컬럼 포함, 정렬됨)
+
+    Returns:
+        {code: factor_df indexed by 'date' (Timestamp)}.
+        compute_all_factors 실패 종목은 dict 에 미포함.
+    """
+    compute_fn, _ = _get_factor_functions()
+    panel: dict[str, pd.DataFrame] = {}
+    for code, df in ohlcv_dict.items():
+        if df is None or len(df) < 60:
+            continue
+        try:
+            factors = compute_fn(df)
+            # date 인덱스로 정렬 — compute_*_factors 는 df.index 를 그대로 쓰므로
+            # df["date"] 가 있으면 이를 인덱스로 변환해 asof 조회 가능하게.
+            if "date" in df.columns:
+                idx = pd.to_datetime(df["date"].values)
+                factors = factors.copy()
+                factors.index = idx
+            panel[code] = factors
+        except Exception as e:
+            logger.debug(f"팩터 panel 계산 실패: {code} - {e}")
+    if panel:
+        first = next(iter(panel.values()))
+        logger.info(
+            f"팩터 panel 빌드 완료: {len(panel)}종목 × {len(first.columns)}팩터 "
+            f"(평균 {sum(len(p) for p in panel.values())/max(len(panel),1):.0f}일)"
+        )
+    return panel
+
+
+def _slice_panel_at_date(
+    factor_panel: dict[str, pd.DataFrame],
+    codes: list[str],
+    date: str,
+) -> pd.DataFrame:
+    """factor_panel 에서 주어진 date 의 cross-section row 슬라이스.
+
+    각 code 별로 date 이전 가장 최근 행 (asof) 사용.
+    """
+    target = pd.Timestamp(date)
+    rows = {}
+    for code in codes:
+        panel_df = factor_panel.get(code)
+        if panel_df is None or panel_df.empty:
+            continue
+        try:
+            # ≤ target 중 가장 최근. 없으면 skip.
+            mask = panel_df.index <= target
+            sub = panel_df[mask]
+            if not sub.empty:
+                rows[code] = sub.iloc[-1]
+        except Exception:
+            continue
+    if not rows:
+        return pd.DataFrame()
+    out = pd.DataFrame(rows).T
+    out.index.name = "code"
+    return out
+
+
 def compute_cross_sectional_factors(
     codes: list[str],
     date: str,
     lookback_days: int = 300,
     ohlcv_dict: dict[str, pd.DataFrame] | None = None,
+    factor_panel: dict[str, pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     """주어진 날짜의 크로스섹션 팩터 매트릭스를 계산합니다.
 
@@ -61,10 +132,27 @@ def compute_cross_sectional_factors(
         date: 기준일 (YYYYMMDD)
         lookback_days: OHLCV lookback 기간
         ohlcv_dict: 사전 로드된 OHLCV 데이터 (None이면 자동 로드)
+        factor_panel: B1 사전 계산된 팩터 패널 ({code: factor_df}). 주어지면
+            compute_all_factors 재계산 우회 — 84 리밸런스의 220 팩터 × 30 종목
+            계산을 1회 빌드 + 슬라이스로 대체.
 
     Returns:
         DataFrame [code index, factor columns] - 각 종목의 최신 팩터 값
     """
+    # B1 fast-path: 사전 빌드된 panel 이 있으면 슬라이스만으로 OHLCV 재계산 우회.
+    if factor_panel is not None and factor_panel:
+        factor_df = _slice_panel_at_date(factor_panel, codes, date)
+        if not factor_df.empty:
+            fund_df = _get_fundamental_factors(date)
+            if not fund_df.empty:
+                factor_df = factor_df.join(fund_df, how="left")
+            logger.debug(
+                f"크로스섹션 팩터(panel-sliced): {len(factor_df)}종목 × "
+                f"{len(factor_df.columns)}팩터 (date={date})"
+            )
+            return factor_df
+        # panel 에 매칭 없으면 폴스루로 기존 계산 경로
+
     if ohlcv_dict is None:
         # 시작일 계산
         from datetime import datetime, timedelta

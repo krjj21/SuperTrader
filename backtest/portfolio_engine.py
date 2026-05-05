@@ -225,6 +225,22 @@ class PortfolioBacktestEngine:
         self._close_cache = close_cache
         self._open_cache = open_cache
 
+        # ── A3: TA features 1회 PRECOMPUTE ──
+        # build_features 는 동일 df 에 4회 중복 호출 (predict + predict_proba×2 + predict_with_position).
+        # 종목별 1회만 빌드하고 일별 루프에서 슬라이스 → 7년 30종목 ≈ 211K → 30회 호출.
+        features_full: dict[str, pd.DataFrame] = {}
+        try:
+            from src.timing.features import build_features as _build_feat
+            for code, df in ohlcv_dict.items():
+                try:
+                    features_full[code] = _build_feat(df)
+                except Exception as fe:
+                    # 한 종목 실패가 전체 백테스트를 막지 않도록 빈 dict 로 그래시풀
+                    features_full[code] = None
+        except Exception:
+            features_full = {}
+        self._features_full = features_full
+
         rebalance_set = set(rebalance_dates)
         current_pool = []
 
@@ -345,10 +361,18 @@ class PortfolioBacktestEngine:
                     continue
 
                 df_until = ohlcv_dict[code].iloc[:idx]
+                # A3: precomputed features 동일 idx 로 슬라이스 (생성 안 됐거나 None 이면 None thread)
+                _feat_full = self._features_full.get(code) if hasattr(self, "_features_full") else None
+                feat_until = _feat_full.iloc[:idx] if _feat_full is not None else None
                 try:
-                    signal = strategy.generate_signal(code, df_until, current_date=date)
+                    signal = strategy.generate_signal(
+                        code, df_until, current_date=date, features=feat_until,
+                    )
                 except TypeError:
-                    signal = strategy.generate_signal(code, df_until)
+                    try:
+                        signal = strategy.generate_signal(code, df_until, current_date=date)
+                    except TypeError:
+                        signal = strategy.generate_signal(code, df_until)
 
                 if signal.signal == Signal.BUY and code not in self.positions:
                     if code in stopped_today:

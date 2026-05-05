@@ -19,6 +19,7 @@ from loguru import logger
 from src.config import get_config
 
 CACHE_DIR = Path("data/pool_cache")
+FACTOR_CACHE_DIR = Path("data/factor_cache")
 UNIVERSE_META_PATH = Path("data/universe_meta.csv")
 
 
@@ -104,3 +105,70 @@ def save(pool_history: dict[str, list[str]], key: str | None = None, extra_meta:
         json.dump(payload, f, ensure_ascii=False, indent=2)
     logger.info(f"종목풀 캐시 저장: {path.name}")
     return path
+
+
+# ── B3: factor_panel 영속화 ─────────────────────────────────────
+# 84 리밸런스 × 30 종목 × 220 팩터 재계산을 1회 빌드 + 슬라이스로 줄인 panel 을
+# 디스크에 parquet 으로 영속화. 동일 config + ohlcv 면 즉시 로드.
+# 환경변수 `SUPER_TRADER_DISABLE_FACTOR_CACHE=1` 로 디스크 캐시 우회 가능.
+
+def factor_panel_path(key: str | None = None) -> Path:
+    return FACTOR_CACHE_DIR / f"panel_{key or cache_key()}.parquet"
+
+
+def load_factor_panel(key: str | None = None):
+    """factor_panel parquet 로드 → {code: factor_df indexed by Timestamp}."""
+    import os
+    if os.environ.get("SUPER_TRADER_DISABLE_FACTOR_CACHE", "0") == "1":
+        return None
+    path = factor_panel_path(key)
+    if not path.exists():
+        return None
+    try:
+        import pandas as pd
+        full = pd.read_parquet(path)
+        # 저장 형식: MultiIndex(code, date) 컬럼=factor names → 분해
+        if not isinstance(full.index, pd.MultiIndex) or full.index.names != ["code", "date"]:
+            return None
+        panel: dict[str, pd.DataFrame] = {}
+        for code, sub in full.groupby(level="code"):
+            sub = sub.copy()
+            sub.index = sub.index.droplevel("code")
+            panel[code] = sub
+        logger.info(f"팩터 패널 캐시 사용: {path.name} ({len(panel)}종목)")
+        return panel
+    except Exception as e:
+        logger.warning(f"팩터 패널 캐시 로드 실패: {e}")
+        return None
+
+
+def save_factor_panel(panel: dict, key: str | None = None) -> Path | None:
+    """factor_panel parquet 저장."""
+    import os
+    if os.environ.get("SUPER_TRADER_DISABLE_FACTOR_CACHE", "0") == "1":
+        return None
+    if not panel:
+        return None
+    try:
+        import pandas as pd
+        FACTOR_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        path = factor_panel_path(key)
+        # MultiIndex(code, date) 로 묶어 단일 parquet 저장
+        frames = []
+        for code, df in panel.items():
+            if df is None or df.empty:
+                continue
+            d = df.copy()
+            d.index.name = "date"
+            d["code"] = code
+            d = d.set_index("code", append=True).reorder_levels(["code", "date"])
+            frames.append(d)
+        if not frames:
+            return None
+        full = pd.concat(frames)
+        full.to_parquet(path)
+        logger.info(f"팩터 패널 캐시 저장: {path.name} ({len(panel)}종목)")
+        return path
+    except Exception as e:
+        logger.warning(f"팩터 패널 캐시 저장 실패: {e}")
+        return None
