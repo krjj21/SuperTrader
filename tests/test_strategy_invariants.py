@@ -166,62 +166,6 @@ class StrategyInvariantTests(unittest.TestCase):
         signal = strategy.generate_signal("AAA", df, stock_name="AAA", current_date="2024-03-01")
         self.assertEqual(signal.signal, Signal.SELL)
 
-    def test_composite_preserves_ic_sign(self) -> None:
-        # L0: negative-IC 팩터는 음 가중 → 양/음 IC 동일 절댓값 시 상쇄.
-        from src.factors.composite import compute_ic_weighted_composite
-
-        # factor_A IC=+0.10, factor_B IC=-0.10
-        factor_report = pd.DataFrame(
-            {"mean_ic": [+0.10, -0.10]},
-            index=["factor_A", "factor_B"],
-        )
-        # 종목 X: A=+1.0, B=+1.0 → 상쇄 → composite ≈ 0
-        # 종목 Y: A=+1.0, B=-1.0 → 강한 양 신호 → composite ≈ +1
-        # 종목 Z: A=-1.0, B=+1.0 → 강한 음 신호 → composite ≈ -1
-        factor_df = pd.DataFrame(
-            {"factor_A": [1.0, 1.0, -1.0], "factor_B": [1.0, -1.0, 1.0]},
-            index=["X", "Y", "Z"],
-        )
-
-        scores = compute_ic_weighted_composite(
-            factor_df, ["factor_A", "factor_B"], factor_report,
-        )
-        # weights: +0.5, -0.5 (sum_abs=1)
-        # X: 0.5*1 + (-0.5)*1 = 0
-        # Y: 0.5*1 + (-0.5)*(-1) = 1.0
-        # Z: 0.5*(-1) + (-0.5)*1 = -1.0
-        self.assertAlmostEqual(scores["X"], 0.0, places=9)
-        self.assertAlmostEqual(scores["Y"], 1.0, places=9)
-        self.assertAlmostEqual(scores["Z"], -1.0, places=9)
-
-    def test_composite_all_positive_ic_backward_compat(self) -> None:
-        # L0: 모든 IC 양수면 sign-preserving 결과 = 기존 abs-weighting 결과.
-        from src.factors.composite import compute_ic_weighted_composite
-
-        factor_report = pd.DataFrame(
-            {"mean_ic": [+0.20, +0.10, +0.05]},
-            index=["A", "B", "C"],
-        )
-        factor_df = pd.DataFrame(
-            {
-                "A": [1.0, 2.0, -1.0],
-                "B": [0.5, -1.0, 1.0],
-                "C": [2.0, 0.0, 1.0],
-            },
-            index=["X", "Y", "Z"],
-        )
-        scores = compute_ic_weighted_composite(
-            factor_df, ["A", "B", "C"], factor_report,
-        )
-        # weights: 0.20/0.35, 0.10/0.35, 0.05/0.35 = 0.5714, 0.2857, 0.1429
-        wA, wB, wC = 0.20 / 0.35, 0.10 / 0.35, 0.05 / 0.35
-        for name, exp in [
-            ("X", wA * 1.0 + wB * 0.5 + wC * 2.0),
-            ("Y", wA * 2.0 + wB * (-1.0) + wC * 0.0),
-            ("Z", wA * (-1.0) + wB * 1.0 + wC * 1.0),
-        ]:
-            self.assertAlmostEqual(scores[name], exp, places=9)
-
     def test_factor_panel_matches_per_rebalance_compute(self) -> None:
         # B1: build_factor_panel 결과를 슬라이스한 cross-section 이 per-rebalance compute 와 동일.
         from src.factors.calculator import (

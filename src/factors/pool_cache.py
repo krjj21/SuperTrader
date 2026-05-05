@@ -55,8 +55,6 @@ def _payload() -> dict:
         "foreign_filter_pct": getattr(cfg.factors, "foreign_filter_pct", 0.5),
         "foreign_filter_lookback": getattr(cfg.factors, "foreign_filter_lookback", 20),
         "investor_filter_mode": getattr(cfg.factors, "investor_filter_mode", "foreign"),
-        # L0 (2026-05-05): IC sign-preserving composite 도입 → 풀 구성 다름. 자동 무효화.
-        "composite_version": "signed_v2",
     }
 
 

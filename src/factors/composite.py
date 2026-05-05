@@ -37,17 +37,10 @@ def compute_ic_weighted_composite(
     factor_report: pd.DataFrame,
     category_weights: dict[str, float] | None = None,
 ) -> pd.Series:
-    """IC 가중 복합 점수를 계산합니다 (sign-preserving, L0 fix 2026-05-05).
+    """IC 가중 복합 점수를 계산합니다.
 
-    이전: weights = |mean_IC| / sum(|mean_IC|) → negative-IC 팩터(역방향 신호)도
-        양수 가중치 → factor_A(+0.15) 와 factor_B(-0.15) 가 서로 *상쇄돼야 할*
-        신호인데 합산되어 평준화. 신호 표면적 손실.
-    수정: weights = mean_IC / sum(|mean_IC|) → 부호 유지, |sum_abs|=1.
-        negative-IC 팩터는 자동으로 음 가중 → 같은 입력값일 때 composite 에서
-        반대 방향으로 기여 (역방향 신호 활용).
-
-    각 팩터의 가중치 부호는 mean_IC 부호와 동일. regime 모드에서는 카테고리별
-    multiplier 가 추가로 곱해진 뒤 abs sum 으로 재정규화된다.
+    각 팩터의 가중치는 |mean_IC|에 비례하며, regime 모드에서는 카테고리별
+    multiplier 가 추가로 곱해진 뒤 정규화된다.
 
     Args:
         factor_df: 중립화/표준화된 팩터 매트릭스
@@ -62,15 +55,11 @@ def compute_ic_weighted_composite(
     if not available:
         return pd.Series(dtype=float)
 
-    # L0: sign-preserving — IC 부호 유지, abs sum 으로 정규화
-    ics_signed = factor_report.loc[available, "mean_ic"].astype(float)
-    abs_sum = ics_signed.abs().sum()
-    if abs_sum > 0:
-        weights = ics_signed / abs_sum
-    else:
-        weights = pd.Series(0.0, index=available)
+    # IC 가중치 (절대값)
+    ics = factor_report.loc[available, "mean_ic"].abs()
+    weights = ics / ics.sum()
 
-    # Regime 카테고리 multiplier 적용 (있을 때만) — 부호 유지 정규화
+    # Regime 카테고리 multiplier 적용 (있을 때만)
     if category_weights:
         from src.regime.weights import get_factor_category
         multipliers = pd.Series(
@@ -81,17 +70,12 @@ def compute_ic_weighted_composite(
             index=weights.index,
         )
         weights = weights * multipliers
-        total_abs = weights.abs().sum()
-        if total_abs > 0:
-            weights = weights / total_abs
+        total = weights.sum()
+        if total > 0:
+            weights = weights / total
 
     # 가중 합산
     scores = (factor_df[available] * weights.values).sum(axis=1)
-    n_neg = int((weights < 0).sum())
-    if n_neg > 0:
-        logger.debug(
-            f"composite signed weights: {len(weights)} factors, {n_neg} negative-IC"
-        )
     return scores.rename("composite_score")
 
 
