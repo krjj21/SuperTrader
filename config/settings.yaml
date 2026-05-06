@@ -15,8 +15,10 @@ universe:
   min_avg_volume: 300_000        # 최소 20일 평균 거래량
   exclude_sectors: []             # 제외 섹터
   # Mid-cap rank 필터 (둘 다 >0 시 활성화, min_market_cap 절대값 대체)
-  cap_rank_min: 30               # 시총 desc rank 시작 (1=최대시총)
-  cap_rank_max: 150              # 시총 desc rank 끝 → 30~150위 = 120종목
+  # 2026-05-06: cap_rank 비활성 — +515% baseline 만든 절대값 5000억 모드로 복귀.
+  # 메가캡(005930 등) 포함. mid-cap 모드는 backtest 검증 부족 (CLAUDE.md 메모).
+  cap_rank_min: 0                # 0 = 비활성 (min_market_cap 절대값 모드)
+  cap_rank_max: 0                # 0 = 비활성
 
 # ── 팩터 설정 ──
 factors:

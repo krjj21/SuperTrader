@@ -48,6 +48,9 @@ def _payload() -> dict:
         "min_market_cap": cfg.universe.min_market_cap,
         "min_avg_volume": cfg.universe.min_avg_volume,
         "exclude_sectors": cfg.universe.exclude_sectors,
+        # 2026-05-06: cap_rank 도 universe 결정에 영향 — 변경 시 풀 무효화 필요
+        "cap_rank_min": getattr(cfg.universe, "cap_rank_min", 0),
+        "cap_rank_max": getattr(cfg.universe, "cap_rank_max", 0),
         "pit_universe": True,
         "meta_signature": _meta_signature(),
         # B1: 투자자 필터 모드 변경 시 풀 구성이 달라지므로 캐시 무효화
