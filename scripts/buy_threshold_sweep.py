@@ -120,10 +120,10 @@ def main() -> None:
             continue
         new_results[th] = m
         logger.info(
-            f"[th={th}] return={m.get('total_return',0):.2f}, "
+            f"[th={th}] return={m.get('total_return',0):+.2f}%, "
             f"sharpe={m.get('sharpe_ratio',0):.2f}, "
             f"trades={m.get('total_trades',0):.0f}, "
-            f"mdd={m.get('max_drawdown',0):.2f}"
+            f"mdd={m.get('max_drawdown',0):+.2f}%"
         )
 
     # 기존 ON_up @ 0.03 + 신규 결과 합치기
@@ -177,8 +177,8 @@ def main() -> None:
                 f"{df.to_string()}\n"
                 "```\n"
                 f"🏆 *peak total_return*: `{best_col}` "
-                f"return={best_ret:+.2f}, sharpe={best_sharpe:.2f}, "
-                f"mdd={best_mdd:.2f}, trades={best_trades:.0f}\n"
+                f"return={best_ret:+.2f}%, sharpe={best_sharpe:.2f}, "
+                f"mdd={best_mdd:+.2f}%, trades={best_trades:.0f}\n"
                 f"리포트: `{csv_path.name}`"
             )
             ok = notifier._send(msg)

@@ -342,8 +342,10 @@ class PortfolioBacktestEngine:
                 if close_price <= 0:
                     continue
                 pos = self.positions[code]
-                pnl_pct = close_price / pos.avg_price - 1
-                if pnl_pct <= stop_loss_threshold:
+                # NOTE: 비율 단위 (예: -0.05). stop_loss_threshold 도 비율 (-0.07).
+                # L171 의 Trade.pnl_pct DB 컬럼은 백분율 (×100) 이라 단위 다름 — 변수명 분리.
+                pnl_ratio = close_price / pos.avg_price - 1
+                if pnl_ratio <= stop_loss_threshold:
                     pending_orders.append((code, pos.name, "sell", True, None))
                     stopped_today.add(code)
 
