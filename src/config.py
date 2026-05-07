@@ -207,6 +207,19 @@ class RiskConfig(BaseModel):
     atr_filter_enabled: bool = False
     atr_filter_max_pct: float = 0.05
     atr_filter_period: int = 14
+    # C: 부분 익절 + 트레일링 스탑 (SELL 신호 시 100% 매도 → 수익 보호 분할).
+    # 1차: SELL 트리거 시 partial_take_profit_pct 만큼 매도 (잔여 보유 유지).
+    # 2차: 잔여는 peak (보유 후 최고가) 대비 trailing_stop_pct 하락 시 전량 매도.
+    # OFF 시 기존 동작 (SELL = 100% 매도).
+    partial_take_profit_enabled: bool = False
+    partial_take_profit_pct: float = 0.50  # 1차 익절 비율 (0.50 = 50%)
+    trailing_stop_pct: float = 0.03         # peak 대비 -3% 하락 시 잔여 매도
+    # E: LLM SELL 보류 조건 강화 — RSI 단독 강한 모멘텀 보호.
+    # 현재 보류 5조건 (MA20위 AND MA5위 AND RSI≥50 AND 1d≥-1% AND 5d≥+1%) 외에,
+    # RSI ≥ rsi_strong_momentum_threshold 단독 충족 시 SELL *보류*.
+    # OFF 시 기존 5조건 룰만 적용.
+    llm_strong_momentum_hold_enabled: bool = False
+    llm_strong_momentum_rsi_threshold: float = 80.0
 
 
 class ScheduleConfig(BaseModel):

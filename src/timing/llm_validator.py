@@ -63,7 +63,13 @@ def _rule_check_buy(ctx: dict) -> tuple[bool, str]:
 
 
 def _rule_check_sell(ctx: dict) -> tuple[bool, str]:
-    """SELL 규칙 판정. 반환: (should_hold, reason)."""
+    """SELL 규칙 판정. 반환: (should_hold, reason).
+
+    보류 조건 (둘 중 하나):
+      A. 5조건 (전부 AND): MA20위 + MA5위 + RSI≥50 + 1d≥-1% + 5d≥+1% (기존)
+      B. E (2026-05-07): config 토글 ON 일 때 RSI ≥ 80 단독 충족 (강한 모멘텀 보호)
+    """
+    # A. 기존 5조건
     if (
         ctx["last"] > ctx["ma20"]
         and ctx["last"] > ctx["ma5"]
@@ -75,6 +81,20 @@ def _rule_check_sell(ctx: dict) -> tuple[bool, str]:
             f"상승추세 유지 MA5/20 위 "
             f"RSI={ctx['rsi']:.0f} 1d={ctx['ret_1d']:+.1f}% 5d={ctx['ret_5d']:+.1f}%"
         )
+    # B. E: RSI 단독 강한 모멘텀 보호
+    try:
+        from src.config import get_config
+        risk_cfg = get_config().risk
+        if (
+            getattr(risk_cfg, "llm_strong_momentum_hold_enabled", False)
+            and ctx["rsi"] >= float(getattr(risk_cfg, "llm_strong_momentum_rsi_threshold", 80.0))
+        ):
+            return True, (
+                f"강한 모멘텀 보호 RSI={ctx['rsi']:.0f} ≥ "
+                f"{float(getattr(risk_cfg, 'llm_strong_momentum_rsi_threshold', 80.0)):.0f}"
+            )
+    except Exception:
+        pass
     return False, (
         f"5조건 미충족 RSI={ctx['rsi']:.0f} "
         f"1d={ctx['ret_1d']:+.1f}% 5d={ctx['ret_5d']:+.1f}%"

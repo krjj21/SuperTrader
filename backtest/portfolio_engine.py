@@ -25,6 +25,9 @@ class BacktestPosition:
     quantity: int
     avg_price: float
     entry_date: str
+    # C: 부분 익절 + 트레일링 스탑 추적
+    peak_price: float = 0.0           # 보유 후 최고가 (매 사이클 max(peak, current) 갱신)
+    partial_taken: bool = False       # 1차 부분 익절 실행 여부
 
 
 @dataclass
@@ -93,6 +96,16 @@ class PortfolioBacktestEngine:
         # LLM/mock 검증 결정 히스토리 (리포트용)
         # [{date, code, name, signal, confirmed, reason}]
         self.llm_decisions: list[dict] = []
+        # C: 부분 익절 + 트레일링 config 캐시
+        try:
+            risk_cfg = get_config().risk
+            self._partial_tp_enabled = bool(getattr(risk_cfg, "partial_take_profit_enabled", False))
+            self._partial_tp_pct = float(getattr(risk_cfg, "partial_take_profit_pct", 0.50))
+            self._trailing_stop_pct = float(getattr(risk_cfg, "trailing_stop_pct", 0.03))
+        except Exception:
+            self._partial_tp_enabled = False
+            self._partial_tp_pct = 0.50
+            self._trailing_stop_pct = 0.03
 
     def _get_portfolio_value(self, prices: dict[str, float]) -> float:
         """포트폴리오 총 가치를 계산합니다."""
@@ -135,10 +148,13 @@ class PortfolioBacktestEngine:
             total_qty = pos.quantity + quantity
             pos.avg_price = (pos.avg_price * pos.quantity + effective_price * quantity) / total_qty
             pos.quantity = total_qty
+            # 추가 매수 시 peak 도 매수가 이상 보장
+            pos.peak_price = max(pos.peak_price, effective_price)
         else:
             self.positions[code] = BacktestPosition(
                 code=code, name=name, quantity=quantity,
                 avg_price=effective_price, entry_date=date,
+                peak_price=effective_price, partial_taken=False,
             )
 
         self.trades.append(BacktestTrade(
@@ -147,27 +163,53 @@ class PortfolioBacktestEngine:
         ))
         return True
 
-    def _sell(self, code: str, price: float, date: str, is_stop_loss: bool = False) -> bool:
-        """매도 실행 (전량). price = 시가 raw, 실제 체결가 = price × (1 − slippage)
-        손절 (is_stop_loss=True) 시 추가 갭 패널티 적용 (T일 종가 트리거 → T+1 시가 갭다운 평균)."""
+    def _sell(
+        self,
+        code: str,
+        price: float,
+        date: str,
+        is_stop_loss: bool = False,
+        sell_qty: int | None = None,
+    ) -> bool:
+        """매도 실행. price = 시가 raw, 실제 체결가 = price × (1 − slippage).
+
+        Args:
+            sell_qty: 매도 수량. None 이면 *config 기반 자동 판단* (signal SELL 이고
+                     C: 부분 익절 ON 이면 partial_take_profit_pct, 그 외 전량).
+                     명시 정수 시 그 수량만 매도.
+            is_stop_loss: True 면 갭 패널티 + 부분 매도 강제 비활성 (force pool_exit / stop_loss 도 동일).
+        """
         if code not in self.positions:
             return False
 
         # 슬리피지 — 매도는 호가 한 단계 아래로 빠진다고 가정
         effective_price = price * (1.0 - self.slippage_pct)
-        # 손절 갭 패널티 — 한국시장 갭다운 평균 추정 (settings.yaml stop_loss_gap_penalty_pct, 기본 1.5%)
+        # 손절/force-exit 갭 패널티 — 한국시장 갭다운 평균 추정 (settings.yaml stop_loss_gap_penalty_pct)
         if is_stop_loss:
             effective_price *= (1.0 - self.gap_penalty_pct)
 
         pos = self.positions[code]
-        revenue = pos.quantity * effective_price
+        # sell_qty 결정: 명시 우선, 없으면 config 기반 자동 판단
+        if sell_qty is None:
+            if (
+                not is_stop_loss
+                and self._partial_tp_enabled
+                and not pos.partial_taken
+                and pos.quantity >= 2
+            ):
+                # C: 1차 부분 익절 (signal SELL 한정)
+                sell_qty = max(1, int(pos.quantity * self._partial_tp_pct))
+        actual_qty = pos.quantity if sell_qty is None else min(sell_qty, pos.quantity)
+        if actual_qty <= 0:
+            return False
+        revenue = actual_qty * effective_price
         commission = revenue * self.commission_rate
         tax = revenue * self.tax_rate
         net_revenue = revenue - commission - tax
 
         self.cash += net_revenue
 
-        pnl = net_revenue - pos.quantity * pos.avg_price
+        pnl = net_revenue - actual_qty * pos.avg_price
         pnl_pct = (effective_price / pos.avg_price - 1) * 100
 
         # 보유일수 계산
@@ -180,11 +222,16 @@ class PortfolioBacktestEngine:
 
         self.trades.append(BacktestTrade(
             code=code, name=pos.name, side="sell",
-            quantity=pos.quantity, price=effective_price, date=date,
+            quantity=actual_qty, price=effective_price, date=date,
             pnl=pnl, pnl_pct=pnl_pct, holding_days=holding_days,
         ))
 
-        del self.positions[code]
+        # 부분 매도 시 잔여 보유 유지, 전량 매도 시 포지션 제거
+        if actual_qty >= pos.quantity:
+            del self.positions[code]
+        else:
+            pos.quantity -= actual_qty
+            pos.partial_taken = True
         return True
 
     def run(
@@ -320,10 +367,11 @@ class PortfolioBacktestEngine:
                 old_set = set(current_pool)
                 new_set = set(new_pool)
 
-                # 퇴출 종목은 모든 전략에서 T+1 SELL 강제 (풀 diff 기반)
+                # 퇴출 종목은 모든 전략에서 T+1 SELL 강제 (풀 diff 기반).
+                # is_stop=True 표시: 갭 패널티 적용 + partial 익절 적용 안 함 (전량 매도).
                 for code in old_set - new_set:
                     if code in self.positions:
-                        pending_orders.append((code, "", "sell", False, None))
+                        pending_orders.append((code, "", "sell", True, None))
 
                 # 신규 편입 자동 BUY 는 commit_pool 기반 전략(factor_only)만 수행.
                 # 타이밍 전략은 generate_signal 이 진입을 결정한다.
@@ -334,7 +382,8 @@ class PortfolioBacktestEngine:
 
                 current_pool = new_pool
 
-            # ── 3. 손절 체크: T일 종가 기준 판단 → T+1 체결 예약 ──
+            # ── 3. 손절 체크 + C: peak 갱신 + 트레일링 스탑 ──
+            # T일 종가 기준 판단 → T+1 체결 예약
             stop_loss_threshold = -self.stop_loss_pct
             stopped_today: set[str] = set()
             for code in list(self.positions.keys()):
@@ -342,10 +391,22 @@ class PortfolioBacktestEngine:
                 if close_price <= 0:
                     continue
                 pos = self.positions[code]
+                # C: peak 갱신 — 매 사이클 max(peak, close)
+                if close_price > pos.peak_price:
+                    pos.peak_price = close_price
                 # NOTE: 비율 단위 (예: -0.05). stop_loss_threshold 도 비율 (-0.07).
-                # L171 의 Trade.pnl_pct DB 컬럼은 백분율 (×100) 이라 단위 다름 — 변수명 분리.
                 pnl_ratio = close_price / pos.avg_price - 1
                 if pnl_ratio <= stop_loss_threshold:
+                    pending_orders.append((code, pos.name, "sell", True, None))
+                    stopped_today.add(code)
+                    continue
+                # C: 트레일링 스탑 — partial 익절 한 종목이 peak 대비 trailing_stop_pct 하락 시 잔여 매도
+                if (
+                    self._partial_tp_enabled
+                    and pos.partial_taken
+                    and pos.peak_price > 0
+                    and close_price <= pos.peak_price * (1.0 - self._trailing_stop_pct)
+                ):
                     pending_orders.append((code, pos.name, "sell", True, None))
                     stopped_today.add(code)
 
