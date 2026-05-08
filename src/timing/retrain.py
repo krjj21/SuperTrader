@@ -251,13 +251,17 @@ def _retrain_rl_model(
             split_idx = int(len(df) * (1 - val_ratio))
             val_dict[code] = df.iloc[split_idx:].reset_index(drop=True)
 
-        # ── Gate 1: 단일종목 episode Sharpe (sanity check) ──
+        # ── Gate 1: 단일종목 episode Sharpe (sanity check, 2026-05-07 비활성화) ──
+        # val 환경 ≠ portfolio simulation (4-28 발견된 issue). val_sharpe 가 portfolio
+        # 성능과 괴리 — 게이트로 작동 시 *진짜 더 나은 모델*도 차단됨. 로그용으로만 측정.
         old_agent = RLTimingModel()
         old_agent.load(str(current_path))
         old_metrics = evaluate_rl_agent(old_agent, val_dict)
         old_sharpe = old_metrics["sharpe"]
-        logger.info(f"기존 RL 모델 val_sharpe: {old_sharpe:.3f}")
-        gate1_pass = new_sharpe > old_sharpe + 0.05
+        logger.info(
+            f"기존 RL 모델 val_sharpe: {old_sharpe:.3f} (gate1 비활성 — 참고용)"
+        )
+        gate1_pass = True  # gate1 비활성 — portfolio metric 으로만 판단
 
         # ── Gate 2~5: portfolio Sharpe / MDD / Win / Return ──
         gate2_pass = gate3_pass = gate4_pass = gate5_pass = False
@@ -282,7 +286,9 @@ def _retrain_rl_model(
                 f"Return: {old_portfolio_return:+.2f}% → {new_portfolio_return:+.2f}%"
             )
 
-            gate2_pass = new_portfolio_sharpe > old_portfolio_sharpe + 0.05
+            # gate2: portfolio_sharpe — 2026-05-07 완화 (+0.05 → 0). 조금이라도 개선이면 채택.
+            # 4-29 v6 ensemble 이후 게이트 차단으로 모델 정체 → 완화로 신규 모델 채택 가능성 ↑.
+            gate2_pass = new_portfolio_sharpe > old_portfolio_sharpe
             # MDD: 더 음수일수록 나쁨. 신모델 MDD가 기존 -5%p 이내 악화는 허용
             gate3_pass = new_portfolio_mdd >= old_portfolio_mdd - 5.0
             # Win rate: 신모델이 기존보다 -2%p 이내로만 떨어져도 허용

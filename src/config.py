@@ -152,6 +152,11 @@ class RLParams(BaseModel):
     profit_aware_sell_pnl_floor: float = 0.10      # 이 이하면 변경 없음
     profit_aware_sell_max_discount: float = 0.20   # 최대 인하 비율 (예: 0.20 → 0.60 × 0.80 = 0.48)
     profit_aware_sell_pnl_ceiling: float = 0.30    # 이 이상에서 max_discount 적용
+    # RL-only SELL 하한 게이트 (2026-05-07 도입).
+    # AI 일일 피드백: "conf 0.45~0.46 SELL 신호는 신뢰도가 낮아 홀딩 유리".
+    # RL action=SELL 이고 XGB ml_sell_prob < floor 이면 SELL 보류 (HOLD 로 변환).
+    # 0.0 = 비활성. 0.45 권장 (RL 의 noise 매도 차단).
+    rl_sell_ml_prob_floor: float = 0.0
 
 
 class TimingConfig(BaseModel):
@@ -159,6 +164,9 @@ class TimingConfig(BaseModel):
     forward_days: int = 5
     buy_threshold: float = 0.02
     sell_threshold: float = -0.02
+    # 2026-05-08: Phase 1 ablation 결과 factor_xgb_rl_llm vs factor_xgb_rl 검증 위해 토글 추가.
+    # false → SignalValidator None 으로 처리 (라이브 LLM 검증 skip).
+    llm_validator_enabled: bool = True
     macd: MACDParams = MACDParams()
     kdj: KDJParams = KDJParams()
     decision_tree: DTParams = DTParams()
@@ -220,6 +228,10 @@ class RiskConfig(BaseModel):
     # OFF 시 기존 5조건 룰만 적용.
     llm_strong_momentum_hold_enabled: bool = False
     llm_strong_momentum_rsi_threshold: float = 80.0
+    # SELL 후 같은 종목 재매수 cooldown (2026-05-07 도입).
+    # AI 일일 피드백 지적: 삼아알미늄·롯데에너지·현대로템 매도 후 즉시 재매수 = 거래비용 누적.
+    # 0 = 비활성. 양수 = 매도 후 N일간 같은 종목 BUY 차단 (백테스트 + 라이브 동일).
+    reentry_cooldown_days: int = 0
 
 
 class ScheduleConfig(BaseModel):

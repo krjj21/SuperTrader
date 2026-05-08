@@ -50,6 +50,10 @@ timing:
   # 동적 forward_days 기능은 코드에서 제거됨 (구현 가설 검증 실패).
   buy_threshold: 0.02             # +2% 이상이면 매수 라벨
   sell_threshold: -0.02           # -2% 이하면 매도 라벨
+  # 2026-05-08: factor_xgb_rl 모드 (LLM 검증 skip).
+  # Phase 1 ablation: factor_xgb_rl=+2.38% vs factor_xgb_rl_llm=+5.45% (LLM +3%p 추가).
+  # 사용자 요청으로 LLM 일시 비활성 — 다음 검증/조정 후 재활성 가능.
+  llm_validator_enabled: false
 
   # MACD 파라미터
   macd:
@@ -127,6 +131,10 @@ timing:
     profit_aware_sell_pnl_floor: 0.10
     profit_aware_sell_max_discount: 0.20
     profit_aware_sell_pnl_ceiling: 0.30
+    # RL-only SELL 하한 게이트 (2026-05-07 도입, 미채택).
+    # 4-cell A/B (2026-05-07): floor=0.45 단독 효과 = Sharpe +0.17 ✓ 이지만 MDD -3.90%p ❌.
+    # 트레이드오프 너무 큼 → 0.0 비활성. 코드는 보존, 추후 약화 sweep (0.30/0.35/0.40) 가능.
+    rl_sell_ml_prob_floor: 0.0     # 0 = 비활성 (채택 보류)
 
 # ── Regime Detector (시장 국면) ──
 # Phase 1+2: 라벨링 + 팩터/포지션 사이즈 모듈레이션. RL state 통합은 별도 라운드.
@@ -181,6 +189,9 @@ risk:
   # RSI ≥ threshold 단독 충족 시 SELL 보류. C 와 함께 도입 권장 (보류 ↑ + 부분 익절 보호).
   llm_strong_momentum_hold_enabled: false
   llm_strong_momentum_rsi_threshold: 80.0
+  # SELL 후 같은 종목 재매수 cooldown (2026-05-07 채택).
+  # 4-cell A/B 단독 효과: 수익 +0.25%p, MDD +0.31%p 개선, 8회 차단 — 모든 지표 개선/중립.
+  reentry_cooldown_days: 3       # 매도 후 3거래일 BUY 차단 (0 = 비활성)
 
 # ── 스케줄 ──
 schedule:

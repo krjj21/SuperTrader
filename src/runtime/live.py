@@ -250,13 +250,17 @@ def run_live() -> None:
     if not _restore_pool_from_disk():
         rebalance_pool()
 
-    # LLM 시그널 검증기
+    # LLM 시그널 검증기 (config 토글 + API key 둘 다 ON 일 때만 활성)
     from src.timing.llm_validator import SignalValidator
-    validator = SignalValidator()
-    if validator.is_enabled:
-        logger.info("LLM 시그널 검증 활성화 (Claude Haiku)")
+    if not getattr(config.timing, "llm_validator_enabled", True):
+        validator = None
+        logger.info("LLM 시그널 검증 비활성화 (config.timing.llm_validator_enabled=false)")
     else:
-        logger.info("LLM 시그널 검증 비활성화 — ANTHROPIC_API_KEY 미설정")
+        validator = SignalValidator()
+        if validator.is_enabled:
+            logger.info("LLM 시그널 검증 활성화 (Claude Haiku)")
+        else:
+            logger.info("LLM 시그널 검증 비활성화 — ANTHROPIC_API_KEY 미설정")
 
     # Notion 일일 리포터
     from src.notification.notion_reporter import NotionReporter
@@ -408,11 +412,14 @@ def run_live() -> None:
                     log_inference(code, stock_name, signal.signal.value, diag)
 
                 if signal.is_actionable:
-                    # LLM 검증: ML 시그널을 기술적 맥락에서 확인
-                    confirmed, llm_reason = validator.validate_signal(
-                        code, signal.stock_name, signal.signal.value,
-                        signal.reason, df,
-                    )
+                    # LLM 검증: ML 시그널을 기술적 맥락에서 확인 (None 시 자동 통과)
+                    if validator is None:
+                        confirmed, llm_reason = True, "LLM 비활성"
+                    else:
+                        confirmed, llm_reason = validator.validate_signal(
+                            code, signal.stock_name, signal.signal.value,
+                            signal.reason, df,
+                        )
                     save_signal_log(
                         stock_code=code,
                         stock_name=signal.stock_name,
@@ -430,6 +437,23 @@ def run_live() -> None:
                         # 이미 보유 중인 종목은 추가 매수하지 않음
                         if code in held_codes:
                             continue
+                        # SELL → BUY cooldown 체크 (재매수 차단)
+                        cd_days = int(getattr(config.risk, "reentry_cooldown_days", 0))
+                        if cd_days > 0:
+                            from src.db.models import get_last_sell_date
+                            last_sell = get_last_sell_date(code, lookback_days=cd_days + 5)
+                            if last_sell:
+                                from datetime import datetime as _dt
+                                try:
+                                    delta = (_dt.now() - _dt.strptime(last_sell, "%Y%m%d")).days
+                                    if delta < cd_days:
+                                        logger.info(
+                                            f"[COOLDOWN] {stock_name}({code}) 매도 후 {delta}일 "
+                                            f"(< {cd_days}d) — BUY 차단"
+                                        )
+                                        continue
+                                except ValueError:
+                                    pass
                         qty = risk_mgr.calculate_position_size(
                             signal, balance.total_deposit,
                             balance.total_eval, len(balance.positions),
@@ -537,15 +561,18 @@ def run_live() -> None:
                 len(balance.positions),
             )
 
-            # LLM 일일 매매 피드백
-            today_trades = get_today_trades()
-            feedback = validator.generate_daily_feedback(
-                trades=today_trades,
-                positions=balance.positions,
-                total_pnl=balance.total_pnl,
-                total_pnl_pct=balance.total_pnl_pct,
-                total_eval=balance.total_eval,
-            )
+            # LLM 일일 매매 피드백 (validator None 시 skip)
+            if validator is None:
+                feedback = None
+            else:
+                today_trades = get_today_trades()
+                feedback = validator.generate_daily_feedback(
+                    trades=today_trades,
+                    positions=balance.positions,
+                    total_pnl=balance.total_pnl,
+                    total_pnl_pct=balance.total_pnl_pct,
+                    total_eval=balance.total_eval,
+                )
             if feedback:
                 notifier.notify_daily_feedback(feedback)
                 logger.info(f"일일 피드백 전송 완료")

@@ -258,6 +258,33 @@ def save_daily_pnl(
         session.close()
 
 
+def get_last_sell_date(stock_code: str, lookback_days: int = 30) -> str | None:
+    """특정 종목의 가장 최근 SELL 거래일 (YYYYMMDD). 없으면 None.
+
+    SELL 후 cooldown 체크용. lookback_days 이전 SELL 은 무시.
+    """
+    from datetime import timedelta
+    session = get_session()
+    cutoff = datetime.now() - timedelta(days=int(lookback_days))
+    try:
+        row = (
+            session.query(TradeLog)
+            .filter(
+                TradeLog.stock_code == stock_code,
+                TradeLog.side == "sell",
+                TradeLog.status == "filled",
+                TradeLog.created_at >= cutoff,
+            )
+            .order_by(TradeLog.created_at.desc())
+            .first()
+        )
+        if row is None:
+            return None
+        return row.created_at.strftime("%Y%m%d")
+    finally:
+        session.close()
+
+
 def get_today_trades() -> list[TradeLog]:
     """오늘의 거래 내역을 조회합니다."""
     session = get_session()

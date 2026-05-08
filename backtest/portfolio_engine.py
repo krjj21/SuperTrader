@@ -102,10 +102,16 @@ class PortfolioBacktestEngine:
             self._partial_tp_enabled = bool(getattr(risk_cfg, "partial_take_profit_enabled", False))
             self._partial_tp_pct = float(getattr(risk_cfg, "partial_take_profit_pct", 0.50))
             self._trailing_stop_pct = float(getattr(risk_cfg, "trailing_stop_pct", 0.03))
+            # SELL → BUY cooldown (재매수 차단, in-memory 추적)
+            self._reentry_cooldown_days = int(getattr(risk_cfg, "reentry_cooldown_days", 0))
         except Exception:
             self._partial_tp_enabled = False
             self._partial_tp_pct = 0.50
             self._trailing_stop_pct = 0.03
+            self._reentry_cooldown_days = 0
+        # 종목별 마지막 매도일 (cooldown 체크용)
+        self._last_sell_date: dict[str, str] = {}
+        self._cooldown_blocked_count = 0
 
     def _get_portfolio_value(self, prices: dict[str, float]) -> float:
         """포트폴리오 총 가치를 계산합니다."""
@@ -229,6 +235,9 @@ class PortfolioBacktestEngine:
         # 부분 매도 시 잔여 보유 유지, 전량 매도 시 포지션 제거
         if actual_qty >= pos.quantity:
             del self.positions[code]
+            # cooldown: 전량 매도 시 last_sell_date 기록 (부분 매도는 잔여 보유라 skip)
+            if self._reentry_cooldown_days > 0:
+                self._last_sell_date[code] = date
         else:
             pos.quantity -= actual_qty
             pos.partial_taken = True
@@ -325,6 +334,19 @@ class PortfolioBacktestEngine:
                     if exec_price <= 0:
                         continue
                     if side == "buy":
+                        # SELL → BUY cooldown 체크 (같은 종목 재매수 차단)
+                        if (
+                            self._reentry_cooldown_days > 0
+                            and code in self._last_sell_date
+                        ):
+                            try:
+                                last_sell = datetime.strptime(self._last_sell_date[code], "%Y-%m-%d")
+                                cur = datetime.strptime(date, "%Y-%m-%d")
+                                if (cur - last_sell).days < self._reentry_cooldown_days:
+                                    self._cooldown_blocked_count += 1
+                                    continue  # cooldown 안 → BUY skip
+                            except ValueError:
+                                pass
                         if code not in self.positions and len(self.positions) < self.max_positions:
                             buy_amount: float | None = None
                             if (

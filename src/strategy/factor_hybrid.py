@@ -62,6 +62,9 @@ class FactorHybridStrategy(BaseStrategy):
         self._profit_aware_floor = float(getattr(rl_cfg, "profit_aware_sell_pnl_floor", 0.10))
         self._profit_aware_ceiling = float(getattr(rl_cfg, "profit_aware_sell_pnl_ceiling", 0.30))
         self._profit_aware_max_disc = float(getattr(rl_cfg, "profit_aware_sell_max_discount", 0.20))
+        # RL-only SELL 하한 게이트 (2026-05-07): RL+Alpha SELL 동의해도 ml_sell_prob < floor 면 HOLD.
+        # AI 일일 피드백: conf 0.45~0.46 SELL 신호 신뢰도 낮음 → noise 매도 차단.
+        self._rl_sell_ml_prob_floor = float(getattr(rl_cfg, "rl_sell_ml_prob_floor", 0.0))
 
         self._pool: set[str] = set()
         # 포지션 추적 (RL 레이어용)
@@ -214,6 +217,21 @@ class FactorHybridStrategy(BaseStrategy):
             high_conf = ml_sell_prob is None or ml_sell_prob >= effective_threshold
 
             if rl_signal == -1:
+                # RL+Alpha SELL 동의 — 단 ml_sell_prob 가 floor 미만이면 noise 가능성으로 보류.
+                if (
+                    self._rl_sell_ml_prob_floor > 0.0
+                    and ml_sell_prob is not None
+                    and ml_sell_prob < self._rl_sell_ml_prob_floor
+                ):
+                    diag["final_signal"] = "HOLD"
+                    return TradeSignal(
+                        signal=Signal.HOLD, stock_code=stock_code, price=price,
+                        reason=(
+                            f"Hybrid HOLD (RL+Alpha 동의이나 conf {conf_str} < "
+                            f"floor {self._rl_sell_ml_prob_floor:.2f}) "
+                            f"보유 {holding_days}일, PnL {unrealized_pnl:+.1%}"
+                        ),
+                    )
                 diag["final_signal"] = "SELL"
                 return TradeSignal(
                     signal=Signal.SELL, stock_code=stock_code, stock_name=stock_name,

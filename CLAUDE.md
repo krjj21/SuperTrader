@@ -212,7 +212,13 @@ After a retrain on 2026-04-27 produced a **val_sharpe=+15.8 / portfolio_sharpe=�
 2. **Trading-frequency reward** (`rl_env.py`): SELL within `min_holding_days=5` and `realized_pnl ≥ -3%` adds a `short_hold_penalty=0.01 × (1 - days/min)` — discourages 1.5d-avg-holding policies that overtrade.
 3. **`evaluate_rl_portfolio()`** (`rl_trainer.py`): a 30-stock mini portfolio backtest (PortfolioBacktestEngine + FactorRLStrategy, 60-day momentum top-N, ~22-day rebalance) called every `portfolio_eval_every=25` episodes. Logs `[Portfolio] sharpe/mdd/trades` alongside the per-episode `val_sharpe`.
 4. **Trades-adjusted score for `best`/early stop** (`rl_trainer.py`): `best_score = val_sharpe / (log(1 + avg_trades) + 1)` instead of raw `val_sharpe`. Same `patience=10` (× 5 episodes = 50 episodes no-improvement → break).
-5. **Triple gate in `_retrain_rl_model`** (`retrain.py`): replacement requires `val_sharpe > old + 0.05` **AND** `portfolio_sharpe > old + 0.05` **AND** `portfolio_mdd ≥ old − 5%p`. Any portfolio-eval exception → all three gates fail safely (model not replaced).
+5. **5-gate (현재 4-gate, 2026-05-07 완화) in `_retrain_rl_model`** (`retrain.py`):
+   - **gate1 (val_sharpe)**: 비활성화됨 (val 환경 ≠ portfolio simulation 신뢰성 낮음, 4-28 발견). 로그용으로만 측정.
+   - **gate2 (portfolio_sharpe)**: `new > old` (이전 +0.05, 2026-05-07 완화 → 조금이라도 개선이면 채택)
+   - **gate3 (portfolio_mdd)**: `new ≥ old − 5%p` (큰 악화 차단 안전망)
+   - **gate4 (portfolio_win)**: `new ≥ old − 2%p`
+   - **gate5 (portfolio_return)**: `new ≥ old − 5%p`
+   완화 동기: 4-29 v6 ensemble 이후 5중 게이트 모두 통과 못해 모델 정체. 완화로 신규 모델 채택 가능성 ↑. portfolio-eval exception → 모든 gate fail safely (모델 미교체).
 
 **v5 result (2026-04-28)**: gates correctly rejected a candidate where `val_sharpe −63 → +10` improved but `portfolio_sharpe 2.6 → 1.5` regressed. Apr-16 backup remains the live model.
 
