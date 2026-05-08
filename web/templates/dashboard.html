@@ -488,6 +488,26 @@
             .stock-name { font-size: 13px; }
             .stock-code { font-size: 11px; }
         }
+        .kospi-period-btn {
+            background: #21262d;
+            color: #8b949e;
+            border: 1px solid #30363d;
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+            transition: all 0.15s ease;
+        }
+        .kospi-period-btn:hover {
+            background: #30363d;
+            color: #c9d1d9;
+        }
+        .kospi-period-btn.active {
+            background: #1f6feb;
+            border-color: #58a6ff;
+            color: #fff;
+        }
     </style>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
@@ -537,6 +557,34 @@
             <canvas id="returnsChart" height="100"></canvas>
             <div style="margin-top:14px; font-size:11px; color:#8b949e; text-transform:uppercase; letter-spacing:0.5px;">Daily P&amp;L</div>
             <canvas id="dailyPnlChart" height="60"></canvas>
+        </div>
+    </div>
+
+    <!-- KOSPI Market -->
+    <div class="table-wrap" style="margin-bottom:24px;">
+        <div class="table-header">📈 KOSPI 시장 추이 <span id="kospi-period-label" style="font-size:11px; color:#8b949e; font-weight:400; margin-left:8px;">(60일)</span></div>
+        <div id="kospi-info" style="padding:14px 20px; display:flex; gap:32px; align-items:baseline; flex-wrap:wrap;">
+            <div>
+                <div style="font-size:11px; color:#8b949e; text-transform:uppercase; letter-spacing:0.5px;">Current</div>
+                <div id="kospi-current" style="font-size:24px; font-weight:700; color:#c9d1d9;">—</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#8b949e; text-transform:uppercase; letter-spacing:0.5px;">Change</div>
+                <div id="kospi-change" style="font-size:18px; font-weight:600;">—</div>
+            </div>
+            <div>
+                <div style="font-size:11px; color:#8b949e; text-transform:uppercase; letter-spacing:0.5px;">High / Low</div>
+                <div id="kospi-hilo" style="font-size:13px; color:#c9d1d9;">—</div>
+            </div>
+            <div style="margin-left:auto; display:flex; gap:6px;">
+                <button class="kospi-period-btn" data-days="20" onclick="loadKospi(20)">20D</button>
+                <button class="kospi-period-btn active" data-days="60" onclick="loadKospi(60)">60D</button>
+                <button class="kospi-period-btn" data-days="252" onclick="loadKospi(252)">1Y</button>
+                <button class="kospi-period-btn" data-days="1260" onclick="loadKospi(1260)">5Y</button>
+            </div>
+        </div>
+        <div style="padding:0 20px 20px 20px;">
+            <canvas id="kospiChart" height="100"></canvas>
         </div>
     </div>
 
@@ -1201,6 +1249,85 @@
         refreshSignals();
         refreshReturns();
         // Auto-refresh disabled — refresh only on page reload.
+
+        // ── KOSPI 시장 차트 ────────────────────────────────
+        let kospiChart = null;
+        let kospiCurrentDays = 60;
+        async function loadKospi(days) {
+            days = days || kospiCurrentDays;
+            kospiCurrentDays = days;
+            // 활성 버튼 갱신
+            document.querySelectorAll('.kospi-period-btn').forEach(b => {
+                b.classList.toggle('active', parseInt(b.dataset.days) === days);
+            });
+            try {
+                const r = await fetch(`/api/kospi?days=${days}`);
+                const d = await r.json();
+                if (d.error) {
+                    console.error('KOSPI fetch failed:', d.error);
+                    return;
+                }
+                // 정보 카드
+                document.getElementById('kospi-current').textContent = d.current.toLocaleString('ko-KR', { maximumFractionDigits: 2 });
+                const chSign = d.change >= 0 ? '+' : '';
+                const chColor = d.change >= 0 ? '#3fb950' : '#f85149';
+                document.getElementById('kospi-change').innerHTML =
+                    `<span style="color:${chColor};">${chSign}${d.change.toFixed(2)} (${chSign}${d.change_pct.toFixed(2)}%)</span>`;
+                document.getElementById('kospi-hilo').textContent =
+                    `${d.high.toFixed(2)} / ${d.low.toFixed(2)}`;
+                document.getElementById('kospi-period-label').textContent = `(${d.n}일)`;
+                // 차트
+                const ctx = document.getElementById('kospiChart').getContext('2d');
+                const lineColor = d.change_pct >= 0 ? '#3fb950' : '#f85149';
+                const fillColor = d.change_pct >= 0 ? 'rgba(63,185,80,0.10)' : 'rgba(248,81,73,0.10)';
+                if (kospiChart) {
+                    kospiChart.data.labels = d.dates;
+                    kospiChart.data.datasets[0].data = d.prices;
+                    kospiChart.data.datasets[0].borderColor = lineColor;
+                    kospiChart.data.datasets[0].backgroundColor = fillColor;
+                    kospiChart.update('none');
+                } else {
+                    kospiChart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: d.dates,
+                            datasets: [{
+                                label: 'KOSPI',
+                                data: d.prices,
+                                borderColor: lineColor,
+                                backgroundColor: fillColor,
+                                borderWidth: 2,
+                                pointRadius: 0,
+                                pointHoverRadius: 4,
+                                fill: true,
+                                tension: 0.15,
+                            }],
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: { display: false },
+                                tooltip: {
+                                    callbacks: {
+                                        label: (item) => `KOSPI: ${item.parsed.y.toFixed(2)}`,
+                                    },
+                                },
+                            },
+                            interaction: { intersect: false, mode: 'index' },
+                            scales: {
+                                x: { ticks: { color: '#484f58', maxTicksLimit: 8, font: { size: 10 } }, grid: { display: false } },
+                                y: { ticks: { color: '#484f58', font: { size: 10 } }, grid: { color: '#21262d' } },
+                            },
+                        },
+                    });
+                }
+            } catch (e) {
+                console.error('KOSPI 로드 실패:', e);
+            }
+        }
+        loadKospi(60);
+        setInterval(() => loadKospi(kospiCurrentDays), 60000);  // 1분 갱신
     </script>
 </body>
 </html>

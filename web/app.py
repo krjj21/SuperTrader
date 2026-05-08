@@ -16,7 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import numpy as np
-from flask import Flask, jsonify, render_template
+from flask import Flask, jsonify, render_template, request
 
 from src.config import load_config, get_config, get_secrets
 from src.broker.kis_client import KISClient
@@ -532,6 +532,51 @@ def api_returns():
         })
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
+
+
+_kospi_cache: dict = {"ts": 0.0, "data": None, "days": 0}
+
+
+@app.route("/api/kospi")
+def api_kospi():
+    """KOSPI (KS11) 인덱스 시계열 + 현재가. 1분 캐시."""
+    import time as _time
+    days = int(request.args.get("days", 60))
+    days = max(5, min(days, 1260))  # 5일~5년
+    now = _time.time()
+    if (
+        _kospi_cache["data"]
+        and _kospi_cache["days"] == days
+        and now - _kospi_cache["ts"] < 60
+    ):
+        return jsonify(_kospi_cache["data"])
+    try:
+        import FinanceDataReader as fdr
+        from datetime import datetime as _dt, timedelta as _td
+        end = _dt.now()
+        start = end - _td(days=int(days * 1.6) + 7)  # 휴장일 여유
+        df = fdr.DataReader("KS11", start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
+        if df is None or df.empty:
+            return jsonify({"error": "KS11 데이터 없음"}), 500
+        df = df.tail(days)
+        df = df.rename(columns=str.lower)
+        cur_close = float(df["close"].iloc[-1])
+        prev_close = float(df["close"].iloc[-2]) if len(df) >= 2 else cur_close
+        data = {
+            "dates": [d.strftime("%Y-%m-%d") for d in df.index],
+            "prices": df["close"].astype(float).tolist(),
+            "current": cur_close,
+            "prev_close": prev_close,
+            "change": cur_close - prev_close,
+            "change_pct": ((cur_close / prev_close) - 1) * 100 if prev_close > 0 else 0.0,
+            "high": float(df["high"].iloc[-1]),
+            "low": float(df["low"].iloc[-1]),
+            "n": int(len(df)),
+        }
+        _kospi_cache.update({"ts": now, "data": data, "days": days})
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/pool")
